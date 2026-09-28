@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Request } from "express";
+import { accessPrefix } from "./access";
 
 /**
  * The subtitle handler has to hand Stremio absolute URLs back, but the SDK
@@ -41,8 +42,25 @@ export function baseUrl(): string {
     isLoopback(configured) &&
     !isLoopback(fromRequest);
 
-  if (configured && !wrongForClient) return configured;
-  return fromRequest ?? `http://127.0.0.1:${process.env.PORT ?? 7000}`;
+  const origin =
+    configured && !wrongForClient
+      ? configured
+      : (fromRequest ?? `http://127.0.0.1:${process.env.PORT ?? 7000}`);
+
+  return withAccessPrefix(origin);
+}
+
+/**
+ * Links have to point back through the access gate, which strips the prefix
+ * before the rest of the addon ever sees a request. BASE_URL is documented as
+ * the bare origin, but a token pasted onto it anyway must not be doubled.
+ */
+function withAccessPrefix(origin: string): string {
+  const prefix = accessPrefix();
+  if (!prefix) return origin;
+  const trimmed = origin.replace(/\/+$/, "");
+  if (trimmed === prefix || trimmed.endsWith(prefix)) return trimmed;
+  return `${trimmed}${prefix}`;
 }
 
 function isLoopback(origin: string): boolean {
