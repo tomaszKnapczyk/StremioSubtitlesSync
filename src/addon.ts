@@ -8,7 +8,7 @@ import { manifest } from "./manifest";
 import { OpenSubtitlesClient } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
 import { directUrl, embeddedUrl, encodeHint, slugify, syncUrl, type VideoHint } from "./urls";
-import { isUnalignable, unalignableKey } from "./sync-failures";
+import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
  * The community typings for the SDK are behind the protocol: they know nothing
@@ -121,10 +121,18 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     filename,
   };
 
+  // The link handed to the player carries this hint and nothing else, so the
+  // file has to be findable from it later. Without a hash or a size it is not,
+  // and an offer built on it would answer 404 when the player follows it.
+  // Stremio asks again with both as soon as the stream is resolved.
+  const locatable = hint.videoHash !== undefined || hint.videoSize !== undefined;
+
   // Only worth the round trips when OpenSubtitles gave us nothing to trust.
   // A hash-matched anchor is already better than anything read from the file.
   const embedded =
-    anchor?.tier === "hash" ? false : await hasEmbeddedReference(hint, config, args.id);
+    anchor?.tier === "hash" || !locatable || isUnalignable(noReferenceKey(encodeHint(hint)))
+      ? false
+      : await hasEmbeddedReference(hint, config, args.id);
 
   log.info(
     anchor

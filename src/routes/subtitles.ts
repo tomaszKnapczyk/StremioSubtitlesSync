@@ -11,7 +11,7 @@ import { parseSubtitle } from "../subtitles/parse";
 import { toSrt, toVtt } from "../subtitles/serialize";
 import type { Cue } from "../subtitles/types";
 import { decodeHint, decodeRef, type FileRef } from "../urls";
-import { markUnalignable, unalignableKey } from "../sync-failures";
+import { markUnalignable, noReferenceKey, unalignableKey } from "../sync-failures";
 import { RateLimitedError } from "../embedded/ffprobe";
 import { embeddedReference } from "../embedded/reference";
 
@@ -176,6 +176,10 @@ export function subtitleRoutes(): Router {
     try {
       const reference = await embeddedReference(hint, config);
       if (!reference) {
+        // Reading it cost tens of seconds and produced nothing usable -- often
+        // a track that only covers on-screen text. That will not change on the
+        // next try, so the menu should stop offering this route for this video.
+        markUnalignable(noReferenceKey(req.params["hint"] ?? ""));
         throw new OpenSubtitlesError("The video's own subtitles could not be read", 503);
       }
 

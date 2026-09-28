@@ -21,6 +21,15 @@ export function unalignableKey(hintToken: string, fileId: number): string {
   return `${hintToken}:${fileId}`;
 }
 
+/**
+ * The video itself, when its own subtitle track turned out to be unreadable or
+ * too sparse to align against. That is a property of the file, not of any one
+ * subtitle, so it rules out every offer built on the embedded route.
+ */
+export function noReferenceKey(hintToken: string): string {
+  return `video:${hintToken}`;
+}
+
 export function markUnalignable(key: string): void {
   unalignable.set(key, true);
 }
