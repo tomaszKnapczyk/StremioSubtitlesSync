@@ -5,4 +5,4 @@ export interface Cue {
   text: string;
 }
 
-export type SubtitleFormat = "srt" | "vtt" | "ass";
+export type SubtitleFormat = "srt" | "vtt" | "ass" | "microdvd" | "mpl2" | "tmplayer";
