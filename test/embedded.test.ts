@@ -192,6 +192,31 @@ test("a stored hash finds the file even with no size to match on", () => {
   assert.equal(ranked[0]!.fileId, 2);
 });
 
+test("release tags alone never identify a file, whatever the title", () => {
+  // Seen in production: a film was given the timings of an unrelated Korean
+  // series because both releases shared MULTi/1080p/WEB-DL/H264/DDP5.1/Atmos
+  // and the same release group, which scores 0.85 on release tags alone.
+  const files: CandidateFile[] = [
+    {
+      containerId: 1,
+      fileId: 1,
+      name: "Donggung.S01E01.MULTi.1080p.DSNP.WEB-DL.H264.DDP5.1.Atmos-K83.mkv",
+      size: 3_000_000_000,
+      kind: "torrents",
+    },
+  ];
+  const hint = {
+    filename: "Unabomber.2026.MULTi.1080p.NF.WEB-DL.H264.DDP5.1.Atmos-K83.mkv",
+    videoSize: undefined,
+    videoHash: undefined,
+  };
+
+  assert.deepEqual(rankCandidates(files, hint), [], "a name is not proof of identity");
+
+  // The same file is still found the moment there is real evidence for it.
+  assert.equal(rankCandidates(files, { ...hint, videoSize: 3_000_000_000 }).length, 1);
+});
+
 test("samples and non-video files are never candidates", () => {
   assert.equal(isVideoFile("movie.mkv", 5_000_000_000), true);
   assert.equal(isVideoFile("sample.mkv", 5_000_000_000), false);

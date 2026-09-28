@@ -51,14 +51,18 @@ export function rankCandidates(files: CandidateFile[], hint: FileHint): Candidat
     return { file, hashMatch, exactSize, nameScore };
   });
 
-  // Without a hash or a size to match on, a weak name guess is not worth a
-  // round trip.
-  const worthTrying = scored.filter(
-    (entry) =>
-      entry.hashMatch ||
-      entry.exactSize ||
-      (hint.videoSize === undefined && entry.nameScore >= 0.5),
-  );
+  // Only proof counts: the hash, or the exact byte size. A name on its own is
+  // not evidence, because releaseScore measures release tags and not the title.
+  // "Unabomber.2026.MULTi.1080p.NF.WEB-DL.H264.DDP5.1.Atmos-K83.mkv" scores
+  // 0.85 against "Donggung.S01E01.MULTi.1080p.DSNP.WEB-DL.H264.DDP5.1.Atmos-K83.mkv"
+  // purely on the tags and the shared release group, and an account holding
+  // thousands of files is almost certain to contain such a twin. Reading the
+  // timings out of the wrong film is worse than reading none: the subtitles
+  // come back aligned to something the viewer is not watching.
+  //
+  // Nothing is lost in practice. Stremio asks twice, first without the hash and
+  // then with it, so the request that can be answered safely always follows.
+  const worthTrying = scored.filter((entry) => entry.hashMatch || entry.exactSize);
 
   worthTrying.sort((a, b) => {
     if (a.hashMatch !== b.hashMatch) return a.hashMatch ? -1 : 1;
