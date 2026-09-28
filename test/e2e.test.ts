@@ -188,7 +188,9 @@ test("verbose labels name the timing method when asked for", async () => {
     const subtitles = await requestSubtitles();
     assert.deepEqual(
       subtitles.map((s) => s.lang),
-      ["Polish - exact match", "Polish - auto-synced"],
+      // Leads with the ISO 639-2 code: Stremio draws the entry from this field
+      // and renders a blank one for anything it cannot read as a language.
+      ["pol - exact match", "pol - auto-synced"],
     );
   } finally {
     delete process.env.LABELS;

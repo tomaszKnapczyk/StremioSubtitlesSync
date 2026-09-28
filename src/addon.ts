@@ -2,7 +2,7 @@ import { addonBuilder, type Subtitle } from "stremio-addon-sdk";
 import { baseUrl } from "./context";
 import { encodeConfig, resolveConfig, type RawUserConfig, type ResolvedConfig } from "./config";
 import { probeEmbedded } from "./embedded/reference";
-import { iso639_2, languageName } from "./lang";
+import { iso639_2 } from "./lang";
 import { log } from "./log";
 import { manifest } from "./manifest";
 import { OpenSubtitlesClient } from "./opensubtitles/client";
@@ -58,9 +58,18 @@ const TIMING_NOTE: Record<Timing, string> = {
   unsynced: "not synced",
 };
 
+/**
+ * Stremio reads this field as an ISO 639-2 code and draws the menu entry from
+ * it. A label it cannot map to a language came out blank in the player, taking
+ * the entry's name with it, so the verbose form now leads with the code and
+ * only then says how the timing was arrived at. Verbose remains a diagnostic
+ * aid: it puts each method in its own entry instead of grouping the subtitles
+ * under the player's own language heading.
+ */
 function label(language: string, timing: Timing, verbose: boolean): string {
-  if (!verbose) return iso639_2(language);
-  return `${languageName(language)} - ${TIMING_NOTE[timing]}`;
+  const code = iso639_2(language);
+  if (!verbose) return code;
+  return `${code} - ${TIMING_NOTE[timing]}`;
 }
 
 export async function getSubtitles(args: SubtitlesArgs): Promise<{
