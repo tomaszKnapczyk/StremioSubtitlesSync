@@ -20,6 +20,7 @@ already in sync. No more pressing the subtitle delay button every few minutes.
 - [Installing the addon in Stremio](#installing-the-addon-in-stremio)
 - [Configuration](#configuration)
 - [Running as a Windows service](#running-as-a-windows-service)
+- [Deploy on Railway](#deploy-on-railway)
 - [What you see in the player](#what-you-see-in-the-player)
 - [Troubleshooting](#troubleshooting)
 - [Security and privacy](#security-and-privacy)
@@ -201,6 +202,81 @@ Changes to `.env` need a restart of the addon.
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 | `LOG_FILE` | `subtitle-sync.log` | Every log line also goes to this file. `off` writes no file. |
 | `EMBEDDED_DUMP_DIR` | | Diagnostics: save references and failed subtitles as JSON in this folder. |
+
+## Deploy on Railway
+
+Running the addon on a small host instead of a PC at home, so a TV or a phone
+can reach it with nothing switched on at home.
+
+Railway builds the repository's `Dockerfile`; `railway.json` points it there and
+sets `/health` as the healthcheck. The runtime image installs FFmpeg 7.1 from
+Debian trixie, which is the oldest version whose `ffprobe` reports TorBox's rate
+limit as `429`. On anything older the addon cannot tell a rate limit from a
+plain error and gives up instead of retrying.
+
+The addon keeps nothing on disk, so **no volume is needed**. A restart only
+empties the in-memory cache.
+
+### An instance on a public address needs `ACCESS_TOKEN`
+
+An instance configured through the environment uses *its owner's*
+OpenSubtitles and TorBox keys for every request it answers. On a public
+hostname, anyone who learns the address would be spending those keys.
+
+Set `ACCESS_TOKEN` to a long random value (`openssl rand -hex 24`) and the whole
+addon moves under `/<ACCESS_TOKEN>/…`. Everything else answers `404`, except
+`/health`, which the platform healthcheck needs and which reveals only that the
+process is up. The install address becomes:
+
+```
+https://<your-domain>/<ACCESS_TOKEN>/manifest.json
+```
+
+That address is in effect a password. Stremio stores it on the account, so do
+not share it. To rotate it: set a new value, redeploy, then remove and re-add
+the addon in Stremio. With `ACCESS_TOKEN` unset nothing changes, so a home
+install works exactly as before.
+
+**Do not type keys into the `/configure` page.** Whatever that page produces is
+baked into the install URL saved on your Stremio account. On a hosted instance,
+configuration belongs in the environment variables only.
+
+### Variables
+
+Beyond the ones in [Configuration](#configuration):
+
+| Variable | Value | Notes |
+|---|---|---|
+| `ACCESS_TOKEN` | `openssl rand -hex 24` | Required on a public host. |
+| `BASE_URL` | `https://<your-domain>` | The bare origin, **without** the token and without a trailing slash. The prefix is added by the addon. |
+| `LOG_FILE` | `off` | Set in the image already: the platform collects stdout, and a file in the container is lost on restart. |
+| `EMBEDDED_CONCURRENCY` | `1` | Fewer `429`s from TorBox. |
+
+`PORT` is injected by the platform and read by the addon.
+
+Pick a region near you and near your debrid provider: Stremio waits about ten
+seconds for a subtitle file, so latency is part of whether it works. Do not
+enable app sleeping — a cold start alone can use up that budget.
+
+### After deploying
+
+```bash
+D=https://<your-domain>
+T=<ACCESS_TOKEN>
+curl -s  $D/health                    # {"ok":true,...}
+curl -si $D/manifest.json | head -1   # 404
+curl -s  $D/$T/manifest.json          # the manifest
+curl -s  "$D/$T/subtitles/movie/tt0111161.json"   # links must contain /$T/
+```
+
+Install by pasting `https://<your-domain>/<ACCESS_TOKEN>/manifest.json` into
+Stremio's "Add addon" box. The INSTALL button on the landing page carries the
+prefix too, but a `stremio://` link is rewritten by some builds, so pasting the
+address is the reliable route.
+
+Do not put a stream proxy in front of this. The addon reads only short stretches
+of a video; sending the video itself through a host that charges for outbound
+traffic turns a film into tens of gigabytes of billed egress.
 
 ## Running as a Windows service
 
