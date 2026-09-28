@@ -7,7 +7,8 @@ import { log } from "./log";
 import { manifest } from "./manifest";
 import { OpenSubtitlesClient } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
-import { directUrl, embeddedUrl, slugify, syncUrl, type VideoHint } from "./urls";
+import { directUrl, embeddedUrl, encodeHint, slugify, syncUrl, type VideoHint } from "./urls";
+import { isUnalignable, unalignableKey } from "./sync-failures";
 
 /**
  * The community typings for the SDK are behind the protocol: they know nothing
@@ -163,6 +164,16 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
       // Skipping rather than breaking, so a droppable entry does not use up a
       // slot that a later alignable one could fill.
       if (entry.timing === "unsynced" && !config.includeUnsynced) continue;
+
+      // This pair was already tried against this video and would not line up.
+      // Offering it again only puts a dead entry in the player's menu.
+      if (
+        entry.timing === "synced-embedded" &&
+        isUnalignable(unalignableKey(encodeHint(hint), ref.fileId))
+      ) {
+        log.debug(`${args.id}: file ${ref.fileId} does not align to this video, not offering it`);
+        continue;
+      }
 
       subtitles.push({
         id: `${entry.timing}-${subtitle.fileId}`,

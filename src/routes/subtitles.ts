@@ -11,6 +11,7 @@ import { parseSubtitle } from "../subtitles/parse";
 import { toSrt, toVtt } from "../subtitles/serialize";
 import type { Cue } from "../subtitles/types";
 import { decodeHint, decodeRef, type FileRef } from "../urls";
+import { markUnalignable, unalignableKey } from "../sync-failures";
 import { RateLimitedError } from "../embedded/ffprobe";
 import { embeddedReference } from "../embedded/reference";
 
@@ -186,6 +187,10 @@ export function subtitleRoutes(): Router {
         dumpTarget(hint, target);
       }
       if (!result.applied) {
+        // Learned the expensive way, so the subtitle menu can stop offering an
+        // entry that will never load. Only this failure is remembered: it says
+        // these two do not belong together, which a busy host does not.
+        markUnalignable(unalignableKey(req.params["hint"] ?? "", file.fileId));
         throw new OpenSubtitlesError(
           `No confident alignment against the video ` +
             `(overlap ${result.confidence.toFixed(2)}, peak ${result.peakRatio.toFixed(1)}, ` +
