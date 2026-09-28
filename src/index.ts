@@ -1,6 +1,7 @@
 import express from "express";
 import { getRouter } from "stremio-addon-sdk";
 import { addonInterface } from "./addon";
+import { accessGate, accessPrefix } from "./access";
 import { landingPage } from "./landing";
 import { runWithRequest } from "./context";
 import { log, logToFile } from "./log";
@@ -28,6 +29,12 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Keys from the environment are spent on every request, so on a public host the
+// addon answers only under a secret path prefix. This sits after CORS but
+// before the log: the token must never reach a hosting platform's log.
+const gate = accessGate(process.env.ACCESS_TOKEN);
+if (gate) app.use(gate);
 
 // One line per request. Stremio shows the same empty menu whether a request
 // failed, never arrived, or was given up on, so the log has to tell them apart.
@@ -64,7 +71,7 @@ app.get("/health", (_req, res) => {
 // getRouter serves the manifest and the resource endpoints, but not the
 // install page. serveHTTP adds that, and this app does not use serveHTTP, so
 // the same template is mounted here.
-const page = landingPage(addonInterface.manifest);
+const page = landingPage(addonInterface.manifest, accessPrefix());
 const servePage = (_req: express.Request, res: express.Response): void => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(page);
@@ -81,8 +88,10 @@ app.use(getRouter(addonInterface));
 app.listen(port, () => {
   const base = process.env.BASE_URL?.replace(/\/+$/, "") ?? `http://127.0.0.1:${port}`;
   log.info(`Subtitle Sync listening on port ${port}`);
-  log.info(`Manifest:  ${base}/manifest.json`);
-  log.info(`Configure: ${base}/configure`);
+  // The real token stays out of the log; the line only shows where it goes.
+  const shown = accessPrefix() ? "/<ACCESS_TOKEN>" : "";
+  log.info(`Manifest:  ${base}${shown}/manifest.json`);
+  log.info(`Configure: ${base}${shown}/configure`);
   if (!process.env.OS_API_KEY) {
     log.warn("OS_API_KEY is not set. Users must supply their own key via /configure.");
   }
