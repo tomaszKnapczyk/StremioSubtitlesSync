@@ -1,4 +1,5 @@
 import type { RequestHandler } from "express";
+import { log } from "./log";
 
 /**
  * A private instance whose API keys come from the environment spends those keys
@@ -23,6 +24,11 @@ export function accessGate(token: string | undefined): RequestHandler | null {
       req.url = url.slice(prefix.length) || "/";
       return next();
     }
+    // The gate runs before the request log, so a refusal would otherwise leave
+    // no trace at all, and a mistyped token would look exactly like Stremio
+    // never sending the request. The path is deliberately left out: it is the
+    // one place a near-miss token could reach the log.
+    log.info(`${req.method} <blocked> -> 404, no or wrong access prefix`);
     res.status(404).type("text/plain").send("Not found");
   };
 }

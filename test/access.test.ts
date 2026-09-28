@@ -86,6 +86,23 @@ test("anything without the prefix is a 404 that gives nothing away", async () =>
   }
 });
 
+test("a refusal is logged without the path it was refused for", async (t) => {
+  // A near-miss token must not reach the log, but the refusal itself has to,
+  // or a mistyped install address looks like no request at all.
+  const lines: string[] = [];
+  t.mock.method(console, "log", (line: unknown) => {
+    lines.push(String(line));
+  });
+
+  const res = await fetch(`${origin}/${TOKEN.slice(0, 20)}/manifest.json`);
+  assert.equal(res.status, 404);
+
+  const refusals = lines.filter((l) => l.includes("<blocked>"));
+  assert.equal(refusals.length, 1);
+  assert.ok(!refusals[0]?.includes(TOKEN.slice(0, 20)), "the attempted token must not be logged");
+  assert.ok(!refusals[0]?.includes("manifest.json"), "the attempted path must not be logged");
+});
+
 test("a wrong or partial prefix is a 404 too", async () => {
   for (const path of [
     `/wrong/manifest.json`,
