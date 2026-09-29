@@ -54,6 +54,17 @@ export function isQuotaExhausted(): boolean {
   return Date.now() < quotaExhaustedUntil;
 }
 
+/**
+ * Whether this file can still be handed over without spending quota.
+ *
+ * A file already fetched costs nothing to serve again, so with the allowance
+ * spent it is the difference between an entry that works and one that answers
+ * 406 when the player follows it.
+ */
+export function isFileCached(fileId: number): boolean {
+  return fileCache.get(`file:${fileId}`) !== undefined;
+}
+
 /** Stand-in for "we tried to log in and it was rejected". */
 const LOGIN_FAILED = "";
 const LOGIN_RETRY_MINUTES = 30;

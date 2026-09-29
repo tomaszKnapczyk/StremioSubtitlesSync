@@ -5,7 +5,7 @@ import { probeEmbedded } from "./embedded/reference";
 import { iso639_2 } from "./lang";
 import { log } from "./log";
 import { manifest } from "./manifest";
-import { OpenSubtitlesClient, isQuotaExhausted } from "./opensubtitles/client";
+import { OpenSubtitlesClient, isFileCached, isQuotaExhausted } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
 import {
   directUrl,
@@ -186,7 +186,8 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // -- but not when it cannot be downloaded. With the daily allowance spent,
   // such an anchor is worth nothing, while the reference inside the video is
   // free, so it is worth the round trips after all.
-  const anchorIsUsable = anchor?.tier === "hash" && !isQuotaExhausted();
+  const quotaSpent = isQuotaExhausted();
+  const anchorIsUsable = anchor?.tier === "hash" && !quotaSpent;
   const embedded =
     anchorIsUsable || !locatable || isUnalignable(noReferenceKey(encodeHint(hint)))
       ? false
@@ -273,6 +274,14 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
       // Skipping rather than breaking, so a droppable entry does not use up a
       // slot that a later alignable one could fill.
       if (entry.timing === "unsynced" && !config.includeUnsynced) continue;
+
+      // With the daily allowance spent, a file that has not already been
+      // fetched cannot be served at all: following the link would answer 406
+      // and the player would show nothing, having offered the entry anyway.
+      if (quotaSpent && !isFileCached(subtitle.fileId)) {
+        log.debug(`${args.id}: no quota left to fetch file ${subtitle.fileId}, not offering it`);
+        continue;
+      }
 
       // This pair was already tried against this video and would not line up.
       // Offering it again only puts a dead entry in the player's menu.
