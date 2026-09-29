@@ -252,6 +252,28 @@ Beyond the ones in [Configuration](#configuration):
 | `LOG_FILE` | `off` | Set in the image already: the platform collects stdout, and a file in the container is lost on restart. |
 | `EMBEDDED_CONCURRENCY` | `1` | Fewer `429`s from TorBox. |
 | `INCLUDE_UNSYNCED` | `1` | Turn on if this is your only subtitle addon; see below. |
+| `N24_USERNAME` / `N24_PASSWORD` | | A Napisy24 account. Without one the public credentials are used. |
+
+### Where Polish subtitles come from
+
+Beyond OpenSubtitles, the addon asks **Napisy24**, which matters because
+OpenSubtitles frequently holds nothing usable for a given release. It is asked
+in three ways, cheapest first:
+
+1. **By the file's hash**, which Stremio already sends, so this costs one
+   request and nothing is read off the video. A hit was made for this exact
+   release and is served unchanged.
+2. **By byte size**, from the listing the service publishes per title. An exact
+   size is the same file, so again nothing needs moving.
+3. **By aligning a listed version**, when the title has Polish subtitles but
+   none for this release. This is what the addon is for: the subtitle is
+   shifted onto the copy being played, using the video's own subtitle track as
+   the timing reference. It is only offered when the video carries such a
+   track, and the aligner refuses a match it is not confident about.
+
+**NapiProjekt is not used.** Its endpoints sit behind a bot check that answers
+an ordinary 200 with an HTML challenge, so the lookup cannot be made reliably
+and is not attempted.
 
 Two settings decide whether the menu looks empty.
 
