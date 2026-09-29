@@ -33,6 +33,8 @@ const tokenCache = new TtlCache<string>(20 * 60 * 60_000, 20);
  * when OpenSubtitles resets the count.
  */
 let quotaExhaustedUntil = 0;
+/** What the last download said was left today, or undefined before any. */
+let quotaLeft: number | undefined;
 
 function noteQuotaExhausted(): void {
   const now = new Date();
@@ -46,12 +48,31 @@ function noteQuotaExhausted(): void {
     0,
   );
   quotaExhaustedUntil = reset;
+  quotaLeft = 0;
   log.warn(`OpenSubtitles download quota is spent; not counting on it again before ${new Date(reset).toISOString()}`);
 }
 
 /** Whether a download would fail right now for want of quota. */
 export function isQuotaExhausted(): boolean {
   return Date.now() < quotaExhaustedUntil;
+}
+
+/** Seconds until a spent allowance comes back, 0 when it is not spent. */
+export function secondsUntilQuotaReset(): number {
+  return Math.max(0, Math.ceil((quotaExhaustedUntil - Date.now()) / 1000));
+}
+
+/**
+ * Downloads left today, as last reported by the service. Undefined until the
+ * first download of the process, and after midnight UTC, when it resets.
+ */
+export function quotaRemaining(): number | undefined {
+  // A count from yesterday says nothing about today.
+  if (quotaExhaustedUntil !== 0 && Date.now() >= quotaExhaustedUntil) {
+    quotaExhaustedUntil = 0;
+    quotaLeft = undefined;
+  }
+  return quotaLeft;
 }
 
 /**
@@ -228,7 +249,9 @@ export class OpenSubtitlesClient {
         log.info(`download quota remaining: ${String(body["remaining"])}`);
         // The service says this was the last one, so there is no need to spend
         // a failed request finding that out on the next file.
-        if (Number(body["remaining"]) <= 0) noteQuotaExhausted();
+        const left = Number(body["remaining"]);
+        if (Number.isFinite(left)) quotaLeft = left;
+        if (left <= 0) noteQuotaExhausted();
       }
 
       const file = await fetch(link, { signal: AbortSignal.timeout(TIMEOUT_MS) });

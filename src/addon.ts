@@ -5,7 +5,13 @@ import { probeEmbedded } from "./embedded/reference";
 import { iso639_2 } from "./lang";
 import { log } from "./log";
 import { manifest } from "./manifest";
-import { OpenSubtitlesClient, isFileCached, isQuotaExhausted } from "./opensubtitles/client";
+import {
+  OpenSubtitlesClient,
+  isFileCached,
+  isQuotaExhausted,
+  quotaRemaining,
+  secondsUntilQuotaReset,
+} from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
 import {
   directUrl,
@@ -252,9 +258,12 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // Collected with how each was timed, then sorted so the ones actually fitted
   // to this file come first. The player keeps the order an addon returns, and
   // with every entry under the same name, position is the only signal it has.
-  const offers: { subtitle: Subtitle; rank: number }[] = [];
-  const offer = (subtitle: Subtitle, timing: Timing): void => {
-    offers.push({ subtitle, rank: TIMING_RANK[timing] });
+  const offers: { subtitle: Subtitle; rank: number; needsQuota: boolean }[] = [];
+  // needsQuota marks an entry that will spend an OpenSubtitles download when
+  // the player follows it, and so can stop working if the allowance runs out
+  // before then.
+  const offer = (subtitle: Subtitle, timing: Timing, needsQuota = false): void => {
+    offers.push({ subtitle, rank: TIMING_RANK[timing], needsQuota });
   };
 
   // First, and without any aligning: NapiProjekt indexes by the video's own
@@ -368,6 +377,8 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
           lang: label(language, entry.timing, config.verboseLabels),
         },
         anchorLost ? "unsynced" : entry.timing,
+        !isFileCached(subtitle.fileId) ||
+          (anchor !== null && !isFileCached(anchor.subtitle.fileId)),
       );
       offered++;
     }
@@ -398,12 +409,44 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     // came without details. Stremio would otherwise keep the empty list for hours.
     return { subtitles, cacheMaxAge: 300 };
   }
+  const keepFor = listLifetime(offers);
   return {
     subtitles,
-    cacheMaxAge: 6 * 3600,
-    staleRevalidate: 24 * 3600,
+    cacheMaxAge: keepFor,
+    // A list that is meant to go stale soon must not be served stale for a day
+    // either, or the shorter lifetime would buy nothing.
+    staleRevalidate: Math.min(24 * 3600, keepFor * 4),
     staleError: 7 * 24 * 3600,
   };
+}
+
+/**
+ * How long the player may keep this list.
+ *
+ * Six hours suits a list that will still be right in six hours. One built on
+ * a nearly spent allowance is not: its OpenSubtitles entries answer 406 once
+ * the allowance runs out, and the player went on showing them. A list without
+ * those entries, built while the allowance was spent, is worse than the one
+ * the reset at midnight UTC will allow. And one holding entries left as
+ * uploaded may do better on the next ask.
+ */
+export function listLifetime(offers: { rank: number; needsQuota: boolean }[]): number {
+  const SIX_HOURS = 6 * 3600;
+  let keep = SIX_HOURS;
+
+  if (isQuotaExhausted()) {
+    keep = Math.min(keep, Math.max(300, secondsUntilQuotaReset()));
+  }
+
+  const left = quotaRemaining();
+  if (left !== undefined && left <= 3 && offers.some((o) => o.needsQuota)) {
+    keep = Math.min(keep, 1800);
+  }
+
+  if (offers.some((o) => o.rank === TIMING_RANK.unsynced)) {
+    keep = Math.min(keep, 3600);
+  }
+  return keep;
 }
 
 /**
