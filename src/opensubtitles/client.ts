@@ -35,6 +35,9 @@ const tokenCache = new TtlCache<string>(20 * 60 * 60_000, 20);
 let quotaExhaustedUntil = 0;
 /** What the last download said was left today, or undefined before any. */
 let quotaLeft: number | undefined;
+/** When the account was last asked, so an unknown count is not asked per request. */
+let quotaCheckedAt = 0;
+const QUOTA_CHECK_INTERVAL_MS = 10 * 60_000;
 
 function noteQuotaExhausted(): void {
   const now = new Date();
@@ -47,9 +50,14 @@ function noteQuotaExhausted(): void {
     0,
     0,
   );
+  const already = Date.now() < quotaExhaustedUntil;
   quotaExhaustedUntil = reset;
   quotaLeft = 0;
-  log.warn(`OpenSubtitles download quota is spent; not counting on it again before ${new Date(reset).toISOString()}`);
+  // Once is enough: the player retries a failed link many times over, and each
+  // retry would otherwise repeat the same line.
+  if (!already) {
+    log.warn(`OpenSubtitles download quota is spent; not counting on it again before ${new Date(reset).toISOString()}`);
+  }
 }
 
 /** Whether a download would fail right now for want of quota. */
@@ -197,6 +205,41 @@ export class OpenSubtitlesClient {
       );
       tokenCache.set(key, LOGIN_FAILED, LOGIN_RETRY_MINUTES * 60_000);
       return undefined;
+    }
+  }
+
+  /**
+   * Asks the account how many downloads are left today, when that is not known.
+   *
+   * The count otherwise lives only in this process, learned from downloads, and
+   * a restart forgot it: the first list after a deploy then offered files that
+   * could not be fetched, and the player retried them dozens of times. Asking
+   * costs no download. Needs a login, and every failure leaves things as they
+   * were -- this is information, never a reason to stop answering.
+   */
+  async syncQuota(): Promise<void> {
+    if (isQuotaExhausted() || quotaRemaining() !== undefined) return;
+    if (Date.now() - quotaCheckedAt < QUOTA_CHECK_INTERVAL_MS) return;
+    quotaCheckedAt = Date.now();
+
+    const jwt = await this.token();
+    if (!jwt) return;
+
+    try {
+      const response = await this.request(`${API}/infos/user`, {
+        method: "GET",
+        headers: this.headers({ Authorization: `Bearer ${jwt}` }),
+      });
+      const body: unknown = await response.json();
+      const data = isRecord(body) && isRecord(body["data"]) ? body["data"] : undefined;
+      const left = Number(data?.["remaining_downloads"]);
+      if (!Number.isFinite(left)) return;
+
+      log.info(`OpenSubtitles account reports ${left} download(s) left today`);
+      if (left <= 0) noteQuotaExhausted();
+      else quotaLeft = left;
+    } catch (error) {
+      log.debug(`could not ask OpenSubtitles for the quota: ${error instanceof Error ? error.message : error}`);
     }
   }
 

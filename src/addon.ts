@@ -170,14 +170,21 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // flag the subtitles belonging to this exact file.
   const wantsPolish = config.languages.includes("pl");
   const [all, napi, napisy24, napisy24Listed, proxy] = await Promise.all([
-    client.search({
+    // Asked first thing so the quota is known before anything is offered on
+    // the strength of it. Its answer is read further down.
+    client
+      .syncQuota()
+      .catch(() => undefined)
+      .then(() =>
+        client.search({
       type: video.type,
       imdbId: video.imdbId,
       season: video.type === "episode" ? video.season : undefined,
       episode: video.type === "episode" ? video.episode : undefined,
-      moviehash: args.extra.videoHash,
-      languages: [...new Set([...config.languages, ...config.anchorLanguages])],
-    }),
+          moviehash: args.extra.videoHash,
+          languages: [...new Set([...config.languages, ...config.anchorLanguages])],
+        }),
+      ),
     // A failure in either must never cost the OpenSubtitles results.
     // Off unless asked for. The service answers with a bot-check page, and
     // every attempt still reads 10 MiB off the stream source first -- real work
@@ -400,7 +407,9 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
 
   // Stable sort: within one tier the sources keep the order they were asked
   // in -- Napisy24, then OpenSubtitles on this instance's key, then the proxy.
-  offers.sort((a, b) => a.rank - b.rank);
+  // On a tie, an entry the quota cannot break goes first: it will play
+  // whatever happens to the allowance before the player follows it.
+  offers.sort((a, b) => a.rank - b.rank || Number(a.needsQuota) - Number(b.needsQuota));
   const subtitles = offers.map((o) => o.subtitle);
 
   log.info(`${args.id}: offering ${subtitles.length} subtitles`);
