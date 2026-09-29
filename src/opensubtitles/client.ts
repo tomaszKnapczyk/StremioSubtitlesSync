@@ -24,6 +24,36 @@ const searchCache = new TtlCache<OsSubtitle[]>(30 * 60_000, 500);
 const fileCache = new TtlCache<string>(12 * 60 * 60_000, 300);
 /** JWTs last about a day; refresh well before that. */
 const tokenCache = new TtlCache<string>(20 * 60 * 60_000, 20);
+/**
+ * When the daily download allowance ran out.
+ *
+ * Worth remembering, because it changes what the addon should even offer: an
+ * anchor that cannot be downloaded is no better than no anchor, and the
+ * reference inside the video costs nothing. Cleared at midnight UTC, which is
+ * when OpenSubtitles resets the count.
+ */
+let quotaExhaustedUntil = 0;
+
+function noteQuotaExhausted(): void {
+  const now = new Date();
+  const reset = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0,
+    0,
+    0,
+    0,
+  );
+  quotaExhaustedUntil = reset;
+  log.warn(`OpenSubtitles download quota is spent; not counting on it again before ${new Date(reset).toISOString()}`);
+}
+
+/** Whether a download would fail right now for want of quota. */
+export function isQuotaExhausted(): boolean {
+  return Date.now() < quotaExhaustedUntil;
+}
+
 /** Stand-in for "we tried to log in and it was rejected". */
 const LOGIN_FAILED = "";
 const LOGIN_RETRY_MINUTES = 30;
@@ -86,6 +116,7 @@ export class OpenSubtitlesClient {
       throw new OpenSubtitlesError("Rate limited by OpenSubtitles", 429, retryAfter);
     }
     if (response.status === 406) {
+      noteQuotaExhausted();
       throw new QuotaExceededError("OpenSubtitles download quota is used up for today");
     }
     throw new OpenSubtitlesError(
@@ -184,6 +215,9 @@ export class OpenSubtitlesClient {
       }
       if (isRecord(body) && body["remaining"] !== undefined) {
         log.info(`download quota remaining: ${String(body["remaining"])}`);
+        // The service says this was the last one, so there is no need to spend
+        // a failed request finding that out on the next file.
+        if (Number(body["remaining"]) <= 0) noteQuotaExhausted();
       }
 
       const file = await fetch(link, { signal: AbortSignal.timeout(TIMEOUT_MS) });

@@ -5,7 +5,7 @@ import { probeEmbedded } from "./embedded/reference";
 import { iso639_2 } from "./lang";
 import { log } from "./log";
 import { manifest } from "./manifest";
-import { OpenSubtitlesClient } from "./opensubtitles/client";
+import { OpenSubtitlesClient, isQuotaExhausted } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
 import {
   directUrl,
@@ -182,9 +182,13 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   const locatable = hint.videoHash !== undefined || hint.videoSize !== undefined;
 
   // Only worth the round trips when OpenSubtitles gave us nothing to trust.
-  // A hash-matched anchor is already better than anything read from the file.
+  // A hash-matched anchor is normally better than anything read from the file
+  // -- but not when it cannot be downloaded. With the daily allowance spent,
+  // such an anchor is worth nothing, while the reference inside the video is
+  // free, so it is worth the round trips after all.
+  const anchorIsUsable = anchor?.tier === "hash" && !isQuotaExhausted();
   const embedded =
-    anchor?.tier === "hash" || !locatable || isUnalignable(noReferenceKey(encodeHint(hint)))
+    anchorIsUsable || !locatable || isUnalignable(noReferenceKey(encodeHint(hint)))
       ? false
       : await hasEmbeddedReference(hint, config, args.id);
 
