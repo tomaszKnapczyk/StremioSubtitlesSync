@@ -133,6 +133,32 @@ test("text tracks are preferred, then the wanted language", () => {
   assert.equal(picked?.order, 2);
 });
 
+test("an unlabelled track beats one labelled with a language nobody asked for", () => {
+  // Seen in the wild: files whose English track carries only on-screen text
+  // while the untagged stream is the film's own full subtitles. An untagged
+  // track is unlabelled, not worse, so it is tried before a dead end.
+  const picked = pickTrack(
+    [track({ order: 0, language: "rus" }), track({ order: 1, language: undefined })],
+    ["eng", "pol"],
+  );
+  assert.equal(picked?.order, 1);
+
+  // "und" is how a container spells the same thing.
+  const undTagged = pickTrack(
+    [track({ order: 0, language: "rus" }), track({ order: 1, language: "und" })],
+    ["eng", "pol"],
+  );
+  assert.equal(undTagged?.order, 1);
+});
+
+test("a wanted language still outranks an unlabelled track", () => {
+  const picked = pickTrack(
+    [track({ order: 0, language: undefined }), track({ order: 1, language: "eng" })],
+    ["eng"],
+  );
+  assert.equal(picked?.order, 1);
+});
+
 test("a bitmap track is still used when it is all there is", () => {
   const picked = pickTrack([track({ codec: "hdmv_pgs_subtitle", bitmap: true })], ["eng"]);
   assert.equal(picked?.codec, "hdmv_pgs_subtitle");

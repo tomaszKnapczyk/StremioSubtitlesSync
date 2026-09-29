@@ -42,8 +42,20 @@ export interface EmbeddedTarget {
 
 /** Below this the reference is too thin to align anything against. */
 const MIN_CUES = 15;
-/** How many tracks to try before giving up on the file. */
+/**
+ * How many tracks to try before giving up on the file.
+ *
+ * Sampling is the expensive path: each attempt pulls windows out of the video
+ * over the network and was measured at tens of seconds, while the player waits
+ * about ten for the whole answer. Three is as far as that can reasonably go.
+ *
+ * Reading the file's own subtitle index costs a fraction of a second, so there
+ * the limit can be far higher -- and it needs to be, because a file carrying
+ * eight tracks of on-screen text before its real one would otherwise be given
+ * up on while the usable track sat two places down the list.
+ */
 const MAX_TRACK_ATTEMPTS = 3;
+const MAX_INDEXED_TRACK_ATTEMPTS = 10;
 
 /**
  * How long a found file is kept. The answer cannot change for a given file, but
@@ -97,9 +109,18 @@ export function rankTracks(
 ): SubtitleTrack[] {
   const usable = tracks.filter((track) => !track.forced);
 
+  // An untagged track is not a worse track, only an unlabelled one, and in
+  // practice it is often the film's own full subtitle stream -- which is
+  // exactly what a timing reference wants. A track labelled with a language
+  // nobody asked for is a likelier dead end, so it ranks below the unlabelled
+  // one rather than beside it.
   const languageRank = (track: SubtitleTrack): number => {
-    const index = track.language ? preferredLanguages.indexOf(track.language) : -1;
-    return index === -1 ? preferredLanguages.length : index;
+    const language = track.language;
+    if (language === undefined || language === "und" || language === "" ) {
+      return preferredLanguages.length;
+    }
+    const index = preferredLanguages.indexOf(language);
+    return index === -1 ? preferredLanguages.length + 1 : index;
   };
 
   return [...usable].sort((a, b) => {
@@ -299,7 +320,9 @@ async function indexedReference(target: EmbeddedTarget, hint: FileHint): Promise
     return null;
   }
 
-  for (const track of target.tracks.slice(0, MAX_TRACK_ATTEMPTS)) {
+  // Reading from the index is cheap, so a file that leads with several tracks
+  // of on-screen text is not given up on before the real one is reached.
+  for (const track of target.tracks.slice(0, MAX_INDEXED_TRACK_ATTEMPTS)) {
     const cues = tracks.find((t) => t.order === track.order)?.cues ?? [];
     if (!coversFilm(cues, target.durationSeconds)) continue;
     log.info(
