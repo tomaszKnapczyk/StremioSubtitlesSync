@@ -251,6 +251,19 @@ Beyond the ones in [Configuration](#configuration):
 | `BASE_URL` | `https://<your-domain>` | The bare origin, **without** the token and without a trailing slash. The prefix is added by the addon. |
 | `LOG_FILE` | `off` | Set in the image already: the platform collects stdout, and a file in the container is lost on restart. |
 | `EMBEDDED_CONCURRENCY` | `1` | Fewer `429`s from TorBox. |
+| `INCLUDE_UNSYNCED` | `1` | Turn on if this is your only subtitle addon; see below. |
+
+Two settings decide whether the menu looks empty.
+
+`INCLUDE_UNSYNCED` off (the default) means a subtitle the addon cannot align to
+anything is dropped, on the grounds that another addon already serves it as
+uploaded. If this is the only subtitle addon installed, that reasoning does not
+hold: a film for which OpenSubtitles has neither a hash match nor a similar
+release then yields no entries at all.
+
+Leave `LABELS` at `iso`. Stremio reads a subtitle's language field as a code
+and renders an entry it cannot map with no name, so the `verbose` form is for
+reading logs, not for daily use.
 
 `PORT` is injected by the platform and read by the addon.
 
