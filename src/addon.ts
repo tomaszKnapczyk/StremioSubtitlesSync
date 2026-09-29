@@ -7,8 +7,17 @@ import { log } from "./log";
 import { manifest } from "./manifest";
 import { OpenSubtitlesClient } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
-import { directUrl, embeddedUrl, encodeHint, napiUrl, slugify, syncUrl, type VideoHint } from "./urls";
-import { napiSubtitleFor } from "./providers/lookup";
+import {
+  directUrl,
+  embeddedUrl,
+  encodeHint,
+  napiUrl,
+  napisy24Url,
+  slugify,
+  syncUrl,
+  type VideoHint,
+} from "./urls";
+import { napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
 import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
@@ -121,7 +130,8 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // One search covers everything OpenSubtitles is asked for: the languages the
   // user wants plus the ones allowed to anchor. The hash goes along so it can
   // flag the subtitles belonging to this exact file.
-  const [all, napi] = await Promise.all([
+  const wantsPolish = config.languages.includes("pl");
+  const [all, napi, napisy24] = await Promise.all([
     client.search({
       type: video.type,
       imdbId: video.imdbId,
@@ -130,14 +140,13 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
       moviehash: args.extra.videoHash,
       languages: [...new Set([...config.languages, ...config.anchorLanguages])],
     }),
-    // A failure here must never cost the OpenSubtitles results.
-    config.languages.includes("pl")
-      ? napiSubtitleFor(hint, config).catch(() => null)
-      : Promise.resolve(null),
+    // A failure in either must never cost the OpenSubtitles results.
+    wantsPolish ? napiSubtitleFor(hint, config).catch(() => null) : Promise.resolve(null),
+    wantsPolish ? napisy24SubtitleFor(hint).catch(() => null) : Promise.resolve(null),
   ]);
 
-  // Empty only counts as empty when neither source had anything.
-  if (all.length === 0 && napi === null) {
+  // Empty only counts as empty when no source had anything.
+  if (all.length === 0 && napi === null && napisy24 === null) {
     return { subtitles: [], cacheMaxAge: 1800 };
   }
 
@@ -180,6 +189,15 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     subtitles.push({
       id: `napi-${napi.md5.slice(0, 12)}`,
       url: napiUrl(base, configToken, napi.md5, slug, ext),
+      lang: label("pl", "exact", config.verboseLabels),
+    });
+  }
+
+  if (napisy24) {
+    log.info(`${args.id}: Napisy24 has subtitles timed to this file`);
+    subtitles.push({
+      id: `n24-${hint.videoHash ?? "file"}`,
+      url: napisy24Url(base, configToken, hint, slug, ext),
       lang: label("pl", "exact", config.verboseLabels),
     });
   }

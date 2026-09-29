@@ -5,7 +5,7 @@ import { TtlCache } from "../cache";
 import { decodeConfig, resolveConfig } from "../config";
 import { log } from "../log";
 import { OpenSubtitlesClient, decodeSubtitle } from "../opensubtitles/client";
-import { cachedSubtitle } from "../providers/lookup";
+import { cachedSubtitle, napisy24SubtitleFor } from "../providers/lookup";
 import { isFileHash } from "../providers/napiprojekt";
 import { OpenSubtitlesError } from "../opensubtitles/types";
 import { align, applyAlignment } from "../subtitles/align";
@@ -258,6 +258,42 @@ export function subtitleRoutes(): Router {
       send(res, ext, render(cues, ext));
     } catch (error) {
       fail(res, error, `serving NapiProjekt subtitle ${md5}`);
+    }
+  });
+
+  /**
+   * Serve a subtitle Napisy24 holds for this exact file.
+   *
+   * Matched on the hash Stremio sent, so it was timed against this release and
+   * nothing here aligns it. The hint travels in the link because the service
+   * is asked by hash and size, and the link has to be able to ask again.
+   */
+  router.get("/:cfg/w/:hint/:name", async (req, res) => {
+    const ext = extensionOf(req.params["name"]);
+    const hint = decodeHint(req.params["hint"]);
+    if (!hint) {
+      res.status(400).type("text/plain").send("Bad subtitle reference");
+      return;
+    }
+
+    try {
+      const body = await napisy24SubtitleFor(hint);
+      if (!body) {
+        throw new OpenSubtitlesError("Napisy24 has no subtitles for this file", 404);
+      }
+
+      // Polish uploads are routinely in a national code page, and often in a
+      // format that counts frames rather than milliseconds.
+      const cues = parseSubtitle(decodeSubtitle(body, "pl"));
+      if (cues.length === 0) {
+        throw new OpenSubtitlesError("The Napisy24 file parsed to zero cues", 502);
+      }
+
+      res.setHeader("X-Subtitle-Sync", "napisy24 exact");
+      log.info(`served ${cues.length} cues from Napisy24`);
+      send(res, ext, render(cues, ext));
+    } catch (error) {
+      fail(res, error, "serving Napisy24 subtitle");
     }
   });
 

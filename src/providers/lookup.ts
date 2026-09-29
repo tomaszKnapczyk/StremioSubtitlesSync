@@ -3,6 +3,7 @@ import { log } from "../log";
 import { streamSourceFor } from "../embedded/reference";
 import { fetchSubtitle, isFileHash } from "./napiprojekt";
 import { videoFileHash } from "./video-hash";
+import { fetchByHash } from "./napisy24-client";
 import type { ResolvedConfig } from "../config";
 import type { FileHint } from "../sources/types";
 
@@ -103,5 +104,25 @@ export async function cachedSubtitle(md5: string): Promise<Buffer | null> {
       log.debug(`NapiProjekt lookup failed: ${error instanceof Error ? error.message : error}`);
       return null;
     }
+  });
+}
+
+/** Napisy24 answers and hands over the file in one request, so both are held. */
+const napisy24Cache = new TtlCache<Buffer | null>(12 * 60 * 60_000, 200);
+
+/**
+ * The Napisy24 subtitle for this exact file, if it has one.
+ *
+ * Far cheaper than the NapiProjekt route: the lookup key is the OpenSubtitles
+ * hash Stremio already sends, so nothing is read off the video. Matched by
+ * hash, so the result is already timed to this release.
+ */
+export async function napisy24SubtitleFor(hint: FileHint): Promise<Buffer | null> {
+  if (!hint.videoHash || hint.videoSize === undefined) return null;
+
+  return napisy24Cache.wrap(`n24:${hint.videoHash}:${hint.videoSize}`, async () => {
+    const body = await fetchByHash(hint).catch(() => null);
+    if (body) log.info(`Napisy24 has subtitles for this file (${body.length} bytes)`);
+    return body;
   });
 }

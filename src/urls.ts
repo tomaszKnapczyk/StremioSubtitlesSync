@@ -118,6 +118,22 @@ export function napiUrl(
   return `${base}/${configToken}/n/${md5}/${slug}.${ext}`;
 }
 
+/**
+ * Serve a subtitle Napisy24 holds for this exact file.
+ *
+ * Carries the same hint the embedded route uses, because the service is asked
+ * by hash and size, and the link has to be able to ask again.
+ */
+export function napisy24Url(
+  base: string,
+  configToken: string,
+  hint: VideoHint,
+  slug: string,
+  ext: string,
+): string {
+  return `${base}/${configToken}/w/${encodeHint(hint)}/${slug}.${ext}`;
+}
+
 /** Serve one file aligned to another. */
 export function syncUrl(
   base: string,

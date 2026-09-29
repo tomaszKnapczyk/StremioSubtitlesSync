@@ -23,6 +23,7 @@
   "type": "commonjs",
   "dependencies": {
     "express": "^4.22.3",
+    "fflate": "^0.8.3",
     "stremio-addon-sdk": "^1.6.10"
   },
   "devDependencies": {
