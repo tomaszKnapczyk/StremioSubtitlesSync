@@ -1,0 +1,71 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  NAPI_HASH_BYTES,
+  isFileHash,
+  napiSubhash,
+  readResponse,
+  subtitleUrl,
+} from "../src/providers/napiprojekt";
+
+/**
+ * The checksum's digit picks, multipliers and offsets are arbitrary, so there
+ * is nothing to reason about here, only something to reproduce exactly. These
+ * are the reference implementation's own vectors.
+ */
+test("the checksum matches the reference implementation", () => {
+  assert.equal(napiSubhash("d41d8cd98f00b204e9800998ecf8427e"), "8030b");
+
+  const zeros = createHash("md5").update(Buffer.alloc(NAPI_HASH_BYTES)).digest("hex");
+  assert.equal(zeros, "f1c9645dbc14efddc7d8a322685f26eb", "the hash is over the first 10 MiB");
+  assert.equal(napiSubhash(zeros), "a4a87");
+});
+
+test("only a real digest is treated as a file hash", () => {
+  assert.equal(isFileHash("8d35d9df565a815a3f3c86003fc1fe46"), true);
+  // Anything arriving from a URL has to be rejected before it reaches the
+  // service, so an id from outside cannot steer the request.
+  assert.equal(isFileHash("8D35D9DF565A815A3F3C86003FC1FE46"), false, "uppercase is not our form");
+  assert.equal(isFileHash("../../etc/passwd"), false);
+  assert.equal(isFileHash("8d35d9df"), false);
+  assert.equal(isFileHash(""), false);
+});
+
+test("the request carries the hash, its checksum and the language", () => {
+  const url = new URL(subtitleUrl("8d35d9df565a815a3f3c86003fc1fe46"));
+
+  assert.equal(url.searchParams.get("f"), "8d35d9df565a815a3f3c86003fc1fe46");
+  assert.equal(url.searchParams.get("t"), napiSubhash("8d35d9df565a815a3f3c86003fc1fe46"));
+  assert.equal(url.searchParams.get("l"), "PL");
+  // dreambox is what makes the service answer with the file itself rather than
+  // with an archive.
+  assert.equal(url.searchParams.get("v"), "dreambox");
+});
+
+test("NPc0 means the service has nothing, and is not a subtitle", () => {
+  // Observed live, both for a file it does not know and when it starts
+  // refusing repeat requests.
+  assert.deepEqual(readResponse(Buffer.from("NPc0")), { kind: "none" });
+  assert.deepEqual(readResponse(Buffer.alloc(0)), { kind: "none" });
+});
+
+test("subtitle text comes back as bytes, not as a decoded string", () => {
+  // These files are routinely in a national code page, so decoding here would
+  // destroy the characters the existing decoder knows how to recover.
+  const body = Buffer.concat([Buffer.from("1\n00:00:01,000 --> 00:00:02,000\n"), Buffer.alloc(64, 0x41)]);
+  const result = readResponse(body);
+
+  assert.equal(result.kind, "subtitle");
+  assert.ok(result.kind === "subtitle" && result.body.equals(body));
+});
+
+test("an archive is reported rather than unpacked on a guess", () => {
+  const sevenZip = Buffer.concat([Buffer.from([0x37, 0x7a, 0xbc, 0xaf]), Buffer.alloc(200)]);
+  assert.deepEqual(readResponse(sevenZip), { kind: "archive" });
+});
+
+test("a few stray bytes are not mistaken for a subtitle file", () => {
+  const result = readResponse(Buffer.from("error"));
+  assert.equal(result.kind, "unexpected");
+});
