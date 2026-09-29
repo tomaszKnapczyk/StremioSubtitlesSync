@@ -159,7 +159,12 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
       languages: [...new Set([...config.languages, ...config.anchorLanguages])],
     }),
     // A failure in either must never cost the OpenSubtitles results.
-    wantsPolish ? napiSubtitleFor(hint, config).catch(() => null) : Promise.resolve(null),
+    // Off unless asked for. The service answers with a bot-check page, and
+    // every attempt still reads 10 MiB off the stream source first -- real work
+    // on every request for an answer that does not come.
+    wantsPolish && process.env.NAPIPROJEKT === "on"
+      ? napiSubtitleFor(hint, config).catch(() => null)
+      : Promise.resolve(null),
     wantsPolish ? napisy24SubtitleFor(hint).catch(() => null) : Promise.resolve(null),
     // The listing covers versions nobody uploaded against this file's hash,
     // which is most of them. Only an exact byte size is acted on.

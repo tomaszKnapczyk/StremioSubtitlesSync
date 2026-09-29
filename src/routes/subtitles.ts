@@ -55,6 +55,13 @@ function send(res: Response, ext: "srt" | "vtt", body: string, cacheable = true)
   res.send(body);
 }
 
+/** Says so in the log when the alignment was carried by the onset test. */
+function via(result: { onsetPeakRatio?: number }): string {
+  return result.onsetPeakRatio !== undefined
+    ? `, dense dialogue, confirmed by line onsets (${result.onsetPeakRatio.toFixed(1)})`
+    : "";
+}
+
 function fail(res: Response, error: unknown, what: string): void {
   const status =
     error instanceof OpenSubtitlesError
@@ -216,7 +223,7 @@ export function subtitleRoutes(): Router {
       );
       log.info(
         `sync ${file.fileId} to the video: offset ${result.offsetMs}ms, ` +
-          `ratio ${result.ratio.toFixed(5)}, confidence ${result.confidence.toFixed(2)}`,
+          `ratio ${result.ratio.toFixed(5)}, confidence ${result.confidence.toFixed(2)}${via(result)}`,
       );
       send(res, ext, body);
     } catch (error) {
@@ -391,7 +398,7 @@ export function subtitleRoutes(): Router {
       );
       log.info(
         `aligned Napisy24 entry ${id} to the video: offset ${result.offsetMs}ms, ` +
-          `ratio ${result.ratio.toFixed(5)}, confidence ${result.confidence.toFixed(2)}`,
+          `ratio ${result.ratio.toFixed(5)}, confidence ${result.confidence.toFixed(2)}${via(result)}`,
       );
       send(res, ext, render(applyAlignment(target, result), ext));
     } catch (error) {
@@ -444,7 +451,7 @@ export function subtitleRoutes(): Router {
         `proxy aligned offset=${result.offsetMs}ms ratio=${result.ratio.toFixed(5)} ` +
           `confidence=${result.confidence.toFixed(3)}`,
       );
-      log.info(`aligned subtitle ${fileId} to the video: offset ${result.offsetMs}ms`);
+      log.info(`aligned subtitle ${fileId} to the video: offset ${result.offsetMs}ms${via(result)}`);
       send(res, ext, render(applyAlignment(target, result), ext));
     } catch (error) {
       // Nothing to align against, or nothing convincing. The subtitle is
