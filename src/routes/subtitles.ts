@@ -6,6 +6,7 @@ import { decodeConfig, resolveConfig } from "../config";
 import { log } from "../log";
 import { OpenSubtitlesClient, decodeSubtitle } from "../opensubtitles/client";
 import { cachedSubtitle, napisy24SubtitleFor } from "../providers/lookup";
+import { fetchListed } from "../providers/napisy24-client";
 import { isFileHash } from "../providers/napiprojekt";
 import { OpenSubtitlesError } from "../opensubtitles/types";
 import { align, applyAlignment } from "../subtitles/align";
@@ -294,6 +295,39 @@ export function subtitleRoutes(): Router {
       send(res, ext, render(cues, ext));
     } catch (error) {
       fail(res, error, "serving Napisy24 subtitle");
+    }
+  });
+
+  /**
+   * Serve a listed Napisy24 version by its entry id.
+   *
+   * Offered only where the listing stated the exact byte size of the file being
+   * played, so this is the same file and nothing here aligns it.
+   */
+  router.get("/:cfg/l/:id/:name", async (req, res) => {
+    const ext = extensionOf(req.params["name"]);
+    const id = req.params["id"] ?? "";
+    if (!/^\d+$/.test(id)) {
+      res.status(400).type("text/plain").send("Bad subtitle reference");
+      return;
+    }
+
+    try {
+      const body = await fetchListed(id);
+      if (!body) {
+        throw new OpenSubtitlesError("Napisy24 did not return that version", 404);
+      }
+
+      const cues = parseSubtitle(decodeSubtitle(body, "pl"));
+      if (cues.length === 0) {
+        throw new OpenSubtitlesError("The Napisy24 file parsed to zero cues", 502);
+      }
+
+      res.setHeader("X-Subtitle-Sync", "napisy24 listed exact");
+      log.info(`served ${cues.length} cues from Napisy24 entry ${id}`);
+      send(res, ext, render(cues, ext));
+    } catch (error) {
+      fail(res, error, `serving Napisy24 entry ${id}`);
     }
   });
 

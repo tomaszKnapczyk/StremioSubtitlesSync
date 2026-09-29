@@ -1,6 +1,12 @@
 import { unzipSync } from "fflate";
 import { log } from "../log";
-import { isSubtitleFile, parseCheckSubResponse } from "./napisy24";
+import {
+  forEpisode,
+  isSubtitleFile,
+  parseCheckSubResponse,
+  parseNapisy24Listing,
+  type Napisy24Listing,
+} from "./napisy24";
 import type { FileHint } from "../sources/types";
 
 /**
@@ -118,4 +124,70 @@ export async function fetchByHash(
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+
+const LISTING_ENDPOINT = "http://napisy24.pl/libs/webapi.php";
+const DOWNLOAD_ENDPOINT = "http://napisy24.pl/run/pages/download.php";
+
+/**
+ * Every version the service lists for a title.
+ *
+ * The hash lookup only finds a release somebody uploaded subtitles for
+ * directly; this listing also covers other releases of the same film, which is
+ * most of them. Season and episode are filtered here because the service
+ * ignores them in the query and answers with the whole series.
+ */
+export async function fetchListing(
+  imdbId: string,
+  season: number | undefined,
+  episode: number | undefined,
+  timeoutMs = 15_000,
+): Promise<Napisy24Listing[]> {
+  try {
+    const response = await fetch(`${LISTING_ENDPOINT}?imdb=${encodeURIComponent(imdbId)}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return [];
+    return forEpisode(parseNapisy24Listing(await response.text()), season, episode);
+  } catch (error) {
+    log.debug(`Napisy24 listing failed: ${describe(error)}`);
+    return [];
+  }
+}
+
+/**
+ * The listing entry timed against this exact file, if there is one.
+ *
+ * Byte size is the only thing here worth trusting. Two different encodes are
+ * never the same number of bytes, so an exact match means the same file --
+ * while a matching release name means very little, as this addon found out the
+ * hard way when tags alone handed a film another title's timings.
+ */
+export function listingForExactFile(
+  listings: Napisy24Listing[],
+  videoSize: number | undefined,
+): Napisy24Listing | null {
+  if (videoSize === undefined) return null;
+  return listings.find((entry) => entry.sizes.includes(videoSize)) ?? null;
+}
+
+/** Downloads one listed version and pulls the subtitle out of its archive. */
+export async function fetchListed(id: string, timeoutMs = 20_000): Promise<Buffer | null> {
+  if (!/^\d+$/.test(id)) return null;
+
+  try {
+    const response = await fetch(`${DOWNLOAD_ENDPOINT}?napisId=${id}&typ=sr`, {
+      headers: { Referer: "http://napisy24.pl/" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      log.debug(`Napisy24 download of ${id} answered ${response.status}`);
+      return null;
+    }
+    return subtitleFromArchive(Buffer.from(await response.arrayBuffer()));
+  } catch (error) {
+    log.debug(`Napisy24 download of ${id} failed: ${describe(error)}`);
+    return null;
+  }
 }

@@ -134,6 +134,22 @@ export function napisy24Url(
   return `${base}/${configToken}/w/${encodeHint(hint)}/${slug}.${ext}`;
 }
 
+/**
+ * Serve a listed Napisy24 version, identified by its own entry id.
+ *
+ * Offered only when the listing states the exact byte size of the file being
+ * played, so the entry id alone is enough to fetch it again.
+ */
+export function napisy24ListedUrl(
+  base: string,
+  configToken: string,
+  id: string,
+  slug: string,
+  ext: string,
+): string {
+  return `${base}/${configToken}/l/${id}/${slug}.${ext}`;
+}
+
 /** Serve one file aligned to another. */
 export function syncUrl(
   base: string,

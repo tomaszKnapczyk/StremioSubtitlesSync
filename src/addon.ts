@@ -12,12 +12,13 @@ import {
   embeddedUrl,
   encodeHint,
   napiUrl,
+  napisy24ListedUrl,
   napisy24Url,
   slugify,
   syncUrl,
   type VideoHint,
 } from "./urls";
-import { napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
+import { listedNapisy24Id, napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
 import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
@@ -41,6 +42,16 @@ type VideoId =
   | { type: "episode"; imdbId: number; season: number; episode: number };
 
 /** Stremio ids are "tt1234567" for a film and "tt1234567:1:4" for an episode. */
+/**
+ * Puts an IMDb id back into the form the outside world uses.
+ *
+ * It is carried here as a number, which loses the leading zeros, and services
+ * asked with "tt111161" instead of "tt0111161" simply find nothing.
+ */
+export function imdbTag(imdbId: number): string {
+  return `tt${String(imdbId).padStart(7, "0")}`;
+}
+
 export function parseVideoId(id: string): VideoId | null {
   const parts = id.split(":");
   const match = /^tt(\d+)$/.exec(parts[0] ?? "");
@@ -131,7 +142,7 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // user wants plus the ones allowed to anchor. The hash goes along so it can
   // flag the subtitles belonging to this exact file.
   const wantsPolish = config.languages.includes("pl");
-  const [all, napi, napisy24] = await Promise.all([
+  const [all, napi, napisy24, napisy24Listed] = await Promise.all([
     client.search({
       type: video.type,
       imdbId: video.imdbId,
@@ -143,10 +154,20 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     // A failure in either must never cost the OpenSubtitles results.
     wantsPolish ? napiSubtitleFor(hint, config).catch(() => null) : Promise.resolve(null),
     wantsPolish ? napisy24SubtitleFor(hint).catch(() => null) : Promise.resolve(null),
+    // The listing covers versions nobody uploaded against this file's hash,
+    // which is most of them. Only an exact byte size is acted on.
+    wantsPolish
+      ? listedNapisy24Id(
+          imdbTag(video.imdbId),
+          video.type === "episode" ? video.season : undefined,
+          video.type === "episode" ? video.episode : undefined,
+          hint.videoSize,
+        ).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   // Empty only counts as empty when no source had anything.
-  if (all.length === 0 && napi === null && napisy24 === null) {
+  if (all.length === 0 && napi === null && napisy24 === null && napisy24Listed === null) {
     return { subtitles: [], cacheMaxAge: 1800 };
   }
 
@@ -198,6 +219,16 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     subtitles.push({
       id: `n24-${hint.videoHash ?? "file"}`,
       url: napisy24Url(base, configToken, hint, slug, ext),
+      lang: label("pl", "exact", config.verboseLabels),
+    });
+  }
+
+  // Only when the hash lookup did not already produce the same subtitle.
+  if (napisy24Listed && !napisy24) {
+    log.info(`${args.id}: Napisy24 lists a version timed to this file`);
+    subtitles.push({
+      id: `n24l-${napisy24Listed}`,
+      url: napisy24ListedUrl(base, configToken, napisy24Listed, slug, ext),
       lang: label("pl", "exact", config.verboseLabels),
     });
   }

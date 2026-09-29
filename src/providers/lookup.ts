@@ -3,7 +3,7 @@ import { log } from "../log";
 import { streamSourceFor } from "../embedded/reference";
 import { fetchSubtitle, isFileHash } from "./napiprojekt";
 import { videoFileHash } from "./video-hash";
-import { fetchByHash } from "./napisy24-client";
+import { fetchByHash, fetchListing, listingForExactFile } from "./napisy24-client";
 import type { ResolvedConfig } from "../config";
 import type { FileHint } from "../sources/types";
 
@@ -124,5 +124,40 @@ export async function napisy24SubtitleFor(hint: FileHint): Promise<Buffer | null
     const body = await fetchByHash(hint).catch(() => null);
     if (body) log.info(`Napisy24 has subtitles for this file (${body.length} bytes)`);
     return body;
+  });
+}
+
+/** Listings change rarely, and one title is asked about repeatedly. */
+const listingCache = new TtlCache<string | null>(6 * 60 * 60_000, 300);
+
+/**
+ * The id of a listed Napisy24 version timed against this exact file.
+ *
+ * Where the hash lookup finds only releases somebody uploaded subtitles for
+ * directly, the listing covers every version the service holds for the title,
+ * and states the byte size each was timed against. An exact size match is the
+ * same file, so the subtitle needs no aligning -- and a size is the only claim
+ * in that listing worth acting on.
+ */
+export async function listedNapisy24Id(
+  imdbId: string,
+  season: number | undefined,
+  episode: number | undefined,
+  videoSize: number | undefined,
+): Promise<string | null> {
+  if (videoSize === undefined) return null;
+
+  const key = `n24list:${imdbId}:${season ?? ""}:${episode ?? ""}:${videoSize}`;
+  return listingCache.wrap(key, async () => {
+    const listings = await fetchListing(imdbId, season, episode).catch(() => []);
+    if (listings.length === 0) return null;
+
+    const match = listingForExactFile(listings, videoSize);
+    if (!match) {
+      log.debug(`Napisy24 lists ${listings.length} version(s) for ${imdbId}, none for this file`);
+      return null;
+    }
+    log.info(`Napisy24 lists a version timed to this file (entry ${match.id})`);
+    return match.id;
   });
 }
