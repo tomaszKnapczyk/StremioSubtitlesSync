@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { napiUrl } from "../src/urls";
 import {
   NAPI_HASH_BYTES,
   isFileHash,
@@ -68,4 +69,15 @@ test("an archive is reported rather than unpacked on a guess", () => {
 test("a few stray bytes are not mistaken for a subtitle file", () => {
   const result = readResponse(Buffer.from("error"));
   assert.equal(result.kind, "unexpected");
+});
+
+test("the served link carries the file hash and nothing else", () => {
+  const md5 = "8d35d9df565a815a3f3c86003fc1fe46";
+  const url = napiUrl("https://host/tok3n", "_", md5, "film-2026", "srt");
+
+  // No anchor and no hint: the hash alone says which subtitle this is, because
+  // the service timed it against this very file.
+  assert.equal(url, `https://host/tok3n/_/n/${md5}/film-2026.srt`);
+  // The access prefix baked into the base has to survive intact.
+  assert.ok(url.startsWith("https://host/tok3n/"));
 });

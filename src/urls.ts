@@ -101,6 +101,23 @@ export function embeddedUrl(
   return `${base}/${configToken}/f/${encodeHint(hint)}/${encodeRef(file)}/${slug}.${ext}`;
 }
 
+/**
+ * Serve one subtitle NapiProjekt holds for this exact file.
+ *
+ * The service indexes by the video's own hash, so what it returns is already
+ * timed to the file being played. There is nothing to align it to and no
+ * anchor to carry: the hash alone says which subtitle this is.
+ */
+export function napiUrl(
+  base: string,
+  configToken: string,
+  md5: string,
+  slug: string,
+  ext: string,
+): string {
+  return `${base}/${configToken}/n/${md5}/${slug}.${ext}`;
+}
+
 /** Serve one file aligned to another. */
 export function syncUrl(
   base: string,

@@ -4,7 +4,9 @@ import { Router, type Request, type Response } from "express";
 import { TtlCache } from "../cache";
 import { decodeConfig, resolveConfig } from "../config";
 import { log } from "../log";
-import { OpenSubtitlesClient } from "../opensubtitles/client";
+import { OpenSubtitlesClient, decodeSubtitle } from "../opensubtitles/client";
+import { cachedSubtitle } from "../providers/lookup";
+import { isFileHash } from "../providers/napiprojekt";
 import { OpenSubtitlesError } from "../opensubtitles/types";
 import { align, applyAlignment } from "../subtitles/align";
 import { parseSubtitle } from "../subtitles/parse";
@@ -216,6 +218,46 @@ export function subtitleRoutes(): Router {
       send(res, ext, body);
     } catch (error) {
       fail(res, error, `syncing file ${file.fileId} to the video`);
+    }
+  });
+
+  /**
+   * Serve a subtitle NapiProjekt holds for this exact file.
+   *
+   * Nothing is aligned here. The service indexes by the video's own hash, so
+   * what it returns was timed against the very file being played -- which is
+   * what makes this route worth having at all.
+   */
+  router.get("/:cfg/n/:md5/:name", async (req, res) => {
+    const ext = extensionOf(req.params["name"]);
+    const md5 = (req.params["md5"] ?? "").toLowerCase();
+    // The hash comes in off a URL, so it is checked before it reaches the
+    // service rather than passed along as given.
+    if (!isFileHash(md5)) {
+      res.status(400).type("text/plain").send("Bad subtitle reference");
+      return;
+    }
+
+    try {
+      const body = await cachedSubtitle(md5);
+      if (!body) {
+        // Either the service has nothing, or it is refusing repeats and the
+        // held copy has expired. Both mean: not available right now.
+        throw new OpenSubtitlesError("NapiProjekt has no subtitles for this file", 404);
+      }
+
+      // These files are routinely in a national code page, and often in a
+      // Polish format that counts frames rather than milliseconds.
+      const cues = parseSubtitle(decodeSubtitle(body, "pl"));
+      if (cues.length === 0) {
+        throw new OpenSubtitlesError("The NapiProjekt file parsed to zero cues", 502);
+      }
+
+      res.setHeader("X-Subtitle-Sync", "napiprojekt exact");
+      log.info(`served ${cues.length} cues from NapiProjekt for ${md5}`);
+      send(res, ext, render(cues, ext));
+    } catch (error) {
+      fail(res, error, `serving NapiProjekt subtitle ${md5}`);
     }
   });
 

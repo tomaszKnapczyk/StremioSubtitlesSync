@@ -7,7 +7,8 @@ import { log } from "./log";
 import { manifest } from "./manifest";
 import { OpenSubtitlesClient } from "./opensubtitles/client";
 import { pickAnchor, rankCandidates, type Anchor } from "./picker";
-import { directUrl, embeddedUrl, encodeHint, slugify, syncUrl, type VideoHint } from "./urls";
+import { directUrl, embeddedUrl, encodeHint, napiUrl, slugify, syncUrl, type VideoHint } from "./urls";
+import { napiSubtitleFor } from "./providers/lookup";
 import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
@@ -101,34 +102,46 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   }
 
   const filename = args.extra.filename;
+  const hint: VideoHint = {
+    videoHash: args.extra.videoHash,
+    videoSize: args.extra.videoSize ? Number(args.extra.videoSize) : undefined,
+    filename,
+  };
+
   const client = new OpenSubtitlesClient({
     apiKey: config.osApiKey,
     username: config.osUsername,
     password: config.osPassword,
   });
 
-  // One search covers everything: the languages the user wants plus the ones
-  // allowed to anchor. The hash goes along so OpenSubtitles can flag the
-  // subtitles that belong to this exact file.
-  const all = await client.search({
-    type: video.type,
-    imdbId: video.imdbId,
-    season: video.type === "episode" ? video.season : undefined,
-    episode: video.type === "episode" ? video.episode : undefined,
-    moviehash: args.extra.videoHash,
-    languages: [...new Set([...config.languages, ...config.anchorLanguages])],
-  });
+  // Asked alongside the search, not after it. NapiProjekt has to read 10 MiB
+  // off the stream source before it can even be queried, and the player does
+  // not wait long for a list, so the two waits overlap instead of stacking.
+  //
+  // One search covers everything OpenSubtitles is asked for: the languages the
+  // user wants plus the ones allowed to anchor. The hash goes along so it can
+  // flag the subtitles belonging to this exact file.
+  const [all, napi] = await Promise.all([
+    client.search({
+      type: video.type,
+      imdbId: video.imdbId,
+      season: video.type === "episode" ? video.season : undefined,
+      episode: video.type === "episode" ? video.episode : undefined,
+      moviehash: args.extra.videoHash,
+      languages: [...new Set([...config.languages, ...config.anchorLanguages])],
+    }),
+    // A failure here must never cost the OpenSubtitles results.
+    config.languages.includes("pl")
+      ? napiSubtitleFor(hint, config).catch(() => null)
+      : Promise.resolve(null),
+  ]);
 
-  if (all.length === 0) {
+  // Empty only counts as empty when neither source had anything.
+  if (all.length === 0 && napi === null) {
     return { subtitles: [], cacheMaxAge: 1800 };
   }
 
   const anchor = pickAnchor(all, config.anchorLanguages, filename);
-  const hint: VideoHint = {
-    videoHash: args.extra.videoHash,
-    videoSize: args.extra.videoSize ? Number(args.extra.videoSize) : undefined,
-    filename,
-  };
 
   // The link handed to the player carries this hint and nothing else, so the
   // file has to be findable from it later. Without a hash or a size it is not,
@@ -158,6 +171,19 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   const ext = config.format;
 
   const subtitles: Subtitle[] = [];
+
+  // First, and without any aligning: NapiProjekt indexes by the video's own
+  // hash, so this subtitle was made for this exact file. Nothing the addon can
+  // compute from a reference beats that.
+  if (napi) {
+    log.info(`${args.id}: NapiProjekt has subtitles timed to this file`);
+    subtitles.push({
+      id: `napi-${napi.md5.slice(0, 12)}`,
+      url: napiUrl(base, configToken, napi.md5, slug, ext),
+      lang: label("pl", "exact", config.verboseLabels),
+    });
+  }
+
   for (const language of config.languages) {
     const inLanguage = all.filter((s) => s.language === language);
     if (inLanguage.length === 0) continue;
