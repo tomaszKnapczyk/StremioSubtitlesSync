@@ -5,6 +5,7 @@ import { fetchSubtitle, isFileHash } from "./napiprojekt";
 import { videoFileHash } from "./video-hash";
 import { fetchByHash, fetchListing, listingForExactFile } from "./napisy24-client";
 import { releaseScore } from "../picker";
+import { searchProxy, type ProxySubtitle } from "./stremio-proxy";
 import type { ResolvedConfig } from "../config";
 import type { FileHint } from "../sources/types";
 
@@ -221,5 +222,32 @@ export async function bestListedNapisy24(
         `offering entry ${best.id} to be aligned`,
     );
     return { id: best.id, exact: false, fps: best.fps };
+  });
+}
+
+/** Somebody else's service, so it is asked once per video and then left alone. */
+const proxyCache = new TtlCache<ProxySubtitle | null>(6 * 60 * 60_000, 300);
+
+/**
+ * The best Polish subtitle Stremio's own addon offers for this video.
+ *
+ * A last resort, asked only when the sources that cost nothing and the
+ * operator's own OpenSubtitles key have both come up short. Kept to a single
+ * entry: the point is to have something when nothing else answered, not to
+ * fill the menu with another service's catalogue.
+ */
+export async function proxySubtitleFor(
+  type: "movie" | "series",
+  videoId: string,
+  videoHash: string | undefined,
+  videoSize: number | undefined,
+): Promise<ProxySubtitle | null> {
+  const key = `proxy:${videoId}:${videoHash ?? ""}:${videoSize ?? 0}`;
+
+  return proxyCache.wrap(key, async () => {
+    const found = await searchProxy(type, videoId, "pol", videoHash, videoSize).catch(() => []);
+    const best = found[0];
+    if (best) log.info(`Stremio's addon offers a Polish subtitle for ${videoId}`);
+    return best ?? null;
   });
 }

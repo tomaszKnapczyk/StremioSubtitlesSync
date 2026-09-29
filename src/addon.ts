@@ -15,11 +15,17 @@ import {
   napisy24AlignedUrl,
   napisy24ListedUrl,
   napisy24Url,
+  proxyUrl,
   slugify,
   syncUrl,
   type VideoHint,
 } from "./urls";
-import { bestListedNapisy24, napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
+import {
+  bestListedNapisy24,
+  napiSubtitleFor,
+  napisy24SubtitleFor,
+  proxySubtitleFor,
+} from "./providers/lookup";
 import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
@@ -143,7 +149,7 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // user wants plus the ones allowed to anchor. The hash goes along so it can
   // flag the subtitles belonging to this exact file.
   const wantsPolish = config.languages.includes("pl");
-  const [all, napi, napisy24, napisy24Listed] = await Promise.all([
+  const [all, napi, napisy24, napisy24Listed, proxy] = await Promise.all([
     client.search({
       type: video.type,
       imdbId: video.imdbId,
@@ -166,10 +172,27 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
           filename,
         ).catch(() => null)
       : Promise.resolve(null),
+    // Somebody else's service, so it goes last and only as a fallback -- but
+    // it is asked alongside the rest, because waiting for the others to fail
+    // first would put its round trip on top of theirs.
+    wantsPolish
+      ? proxySubtitleFor(
+          video.type === "episode" ? "series" : "movie",
+          args.id,
+          args.extra.videoHash,
+          hint.videoSize,
+        ).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   // Empty only counts as empty when no source had anything.
-  if (all.length === 0 && napi === null && napisy24 === null && napisy24Listed === null) {
+  if (
+    all.length === 0 &&
+    napi === null &&
+    napisy24 === null &&
+    napisy24Listed === null &&
+    proxy === null
+  ) {
     return { subtitles: [], cacheMaxAge: 1800 };
   }
 
@@ -300,6 +323,16 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
       });
       offered++;
     }
+  }
+
+  // Last, after everything this instance can reach on its own account.
+  if (proxy) {
+    log.info(`${args.id}: offering a Polish subtitle by way of Stremio's addon`);
+    subtitles.push({
+      id: `proxy-${proxy.fileId}`,
+      url: proxyUrl(base, configToken, hint, proxy.fileId, slug, ext),
+      lang: label("pl", embedded ? "synced-embedded" : "unsynced", config.verboseLabels),
+    });
   }
 
   log.info(`${args.id}: offering ${subtitles.length} subtitles`);

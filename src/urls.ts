@@ -169,6 +169,24 @@ export function napisy24AlignedUrl(
   return `${base}/${configToken}/a/${encodeHint(hint)}/${id}/${slug}.${ext}`;
 }
 
+/**
+ * Serve a subtitle from Stremio's own addon, aligned where possible.
+ *
+ * Carries the hint so the video's own subtitle track can act as the timing
+ * reference: the file arrives as uploaded, which is exactly the case this
+ * addon exists to improve on.
+ */
+export function proxyUrl(
+  base: string,
+  configToken: string,
+  hint: VideoHint,
+  fileId: string,
+  slug: string,
+  ext: string,
+): string {
+  return `${base}/${configToken}/p/${encodeHint(hint)}/${fileId}/${slug}.${ext}`;
+}
+
 /** Serve one file aligned to another. */
 export function syncUrl(
   base: string,

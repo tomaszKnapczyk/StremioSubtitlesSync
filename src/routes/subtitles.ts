@@ -7,6 +7,7 @@ import { log } from "../log";
 import { OpenSubtitlesClient, decodeSubtitle } from "../opensubtitles/client";
 import { cachedSubtitle, napisy24SubtitleFor } from "../providers/lookup";
 import { fetchListed } from "../providers/napisy24-client";
+import { fetchProxyFile } from "../providers/stremio-proxy";
 import { resolveConfig as resolveCfg } from "../config";
 import { isFileHash } from "../providers/napiprojekt";
 import { OpenSubtitlesError } from "../opensubtitles/types";
@@ -395,6 +396,64 @@ export function subtitleRoutes(): Router {
       send(res, ext, render(applyAlignment(target, result), ext));
     } catch (error) {
       fail(res, error, `aligning Napisy24 entry ${id}`);
+    }
+  });
+
+  /**
+   * Serve a subtitle from Stremio's own addon, aligned where possible.
+   *
+   * It arrives as uploaded, so this is the ordinary case for this addon: shift
+   * it onto the file being played. Unlike the aligned Napisy24 route, a failure
+   * to align is not fatal here -- the subtitle is handed over unshifted, since
+   * that is exactly what the player would otherwise get from the other addon.
+   */
+  router.get("/:cfg/p/:hint/:fileId/:name", async (req, res) => {
+    const ext = extensionOf(req.params["name"]);
+    const hint = decodeHint(req.params["hint"]);
+    const fileId = req.params["fileId"] ?? "";
+    if (!hint || !/^\d+$/.test(fileId)) {
+      res.status(400).type("text/plain").send("Bad subtitle reference");
+      return;
+    }
+
+    const config = resolveCfg(decodeConfig(req.params["cfg"]));
+
+    let target: Cue[];
+    try {
+      const body = await fetchProxyFile(fileId);
+      if (!body) throw new OpenSubtitlesError("That subtitle could not be fetched", 404);
+
+      target = parseSubtitle(decodeSubtitle(body, "pl"));
+      if (target.length === 0) {
+        throw new OpenSubtitlesError("The file parsed to zero cues", 502);
+      }
+    } catch (error) {
+      fail(res, error, `fetching subtitle ${fileId}`);
+      return;
+    }
+
+    try {
+      const reference = await embeddedReference(hint, config);
+      if (!reference) throw new Error("no reference in the video");
+
+      const result = align(reference, target);
+      if (!result.applied) throw new Error(`alignment not confident enough`);
+
+      res.setHeader(
+        "X-Subtitle-Sync",
+        `proxy aligned offset=${result.offsetMs}ms ratio=${result.ratio.toFixed(5)} ` +
+          `confidence=${result.confidence.toFixed(3)}`,
+      );
+      log.info(`aligned subtitle ${fileId} to the video: offset ${result.offsetMs}ms`);
+      send(res, ext, render(applyAlignment(target, result), ext));
+    } catch (error) {
+      // Nothing to align against, or nothing convincing. The subtitle is
+      // already in hand and unshifted is what the other addon serves anyway,
+      // so hand it over rather than show nothing.
+      const message = error instanceof Error ? error.message : String(error);
+      log.info(`serving subtitle ${fileId} unaligned (${message})`);
+      res.setHeader("X-Subtitle-Sync", "proxy unaligned");
+      send(res, ext, render(target, ext), false);
     }
   });
 
