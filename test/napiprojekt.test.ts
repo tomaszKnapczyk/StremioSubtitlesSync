@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { napiUrl } from "../src/urls";
 import {
   NAPI_HASH_BYTES,
@@ -80,4 +82,21 @@ test("the served link carries the file hash and nothing else", () => {
   assert.equal(url, `https://host/tok3n/_/n/${md5}/film-2026.srt`);
   // The access prefix baked into the base has to survive intact.
   assert.ok(url.startsWith("https://host/tok3n/"));
+});
+
+test("a bot-check page is never mistaken for a subtitle", () => {
+  // Captured live: the service answers 200 with an HTML challenge, and it was
+  // read as a subtitle because it was comfortably longer than a few bytes.
+  const blocked = fs.readFileSync(
+    path.join(__dirname, "fixtures", "providers", "napi-blocked.html"),
+  );
+
+  assert.ok(blocked.length > 7000, "the page is long enough to pass any length test");
+  assert.deepEqual(readResponse(blocked), { kind: "blocked" });
+});
+
+test("length alone never makes something a subtitle", () => {
+  // Plenty of bytes, no timed lines: not a subtitle, whatever its size.
+  const prose = Buffer.from("Nie znaleziono napisow dla tego pliku. ".repeat(40));
+  assert.equal(readResponse(prose).kind, "unexpected");
 });

@@ -63,6 +63,16 @@ export function subtitleUrl(md5: string, language = "PL"): string {
   return `${ENDPOINT}?${params.toString()}`;
 }
 
+/**
+ * A page, not a subtitle. The service sits behind a bot check that answers an
+ * ordinary-looking 200 with an HTML challenge, and a length test alone reads
+ * that as a subtitle file -- which is exactly the mistake this guards against.
+ */
+function looksLikeHtml(body: Buffer): boolean {
+  const head = body.subarray(0, 200).toString("latin1").trimStart().toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html") || head.includes("<script");
+}
+
 export type NapiResult =
   /** The service has no subtitles for this file. */
   | { kind: "none" }
@@ -74,6 +84,8 @@ export type NapiResult =
    * whatever happens to be inside.
    */
   | { kind: "archive" }
+  /** A bot check stood in the way. Nothing to do here but say so. */
+  | { kind: "blocked" }
   /** Anything else, kept for the log. */
   | { kind: "unexpected"; head: string };
 
@@ -89,12 +101,30 @@ export function readResponse(body: Buffer): NapiResult {
   if (body.length === 0) return { kind: "none" };
   if (body.subarray(0, NOT_FOUND.length).toString("latin1") === NOT_FOUND) return { kind: "none" };
   if (body.subarray(0, 4).equals(SEVEN_ZIP)) return { kind: "archive" };
+  if (looksLikeHtml(body)) return { kind: "blocked" };
 
   // A handful of bytes cannot be a subtitle file, whatever it is.
   if (body.length < 64) {
     return { kind: "unexpected", head: body.subarray(0, 16).toString("latin1") };
   }
+
+  // Length is not evidence. A subtitle file has timed lines in it, and nothing
+  // that lacks them should ever reach a player as one.
+  if (!hasTimings(body)) {
+    return { kind: "unexpected", head: body.subarray(0, 32).toString("latin1") };
+  }
   return { kind: "subtitle", body };
+}
+
+/** SRT/VTT arrows, MicroDVD frame counts, MPL2 tenths or TMPlayer clock times. */
+function hasTimings(body: Buffer): boolean {
+  const head = body.subarray(0, 4000).toString("latin1");
+  return (
+    /\d\d:\d\d:\d\d[,.]\d/.test(head) ||
+    /^\{\d+\}\{\d*\}/m.test(head) ||
+    /^\[\d+\]\[\d*\]/m.test(head) ||
+    /^\d{1,2}:[0-5]\d:[0-5]\d[:=]/m.test(head)
+  );
 }
 
 export interface FetchOptions {

@@ -130,6 +130,28 @@ async function askNapi(md5: string): Promise<{ status: string; bytes: number }> 
     return { status: "SA, ale w archiwum 7z", bytes: body.length };
   }
   if (body.length === 0) return { status: "pusta odpowiedz", bytes: 0 };
+
+  // A length test alone once reported a Cloudflare page as a subtitle file.
+  const head = body.subarray(0, 200).toString("latin1").trimStart().toLowerCase();
+  if (head.startsWith("<!doctype html") || head.startsWith("<html")) {
+    return { status: "ZAPORA (strona HTML, nie napisy)", bytes: body.length };
+  }
+  const probe = body.subarray(0, 4000).toString("latin1");
+  const timed =
+    /\d\d:\d\d:\d\d[,.]\d/.test(probe) ||
+    /^\{\d+\}\{\d*\}/m.test(probe) ||
+    /^\[\d+\]\[\d*\]/m.test(probe) ||
+    /^\d{1,2}:[0-5]\d:[0-5]\d[:=]/m.test(probe);
+  if (!timed) return { status: "cos innego (brak znacznikow czasu)", bytes: body.length };
+
+  // Keep whatever came back. A hit is one request per file, so if this is not
+  // a subtitle after all, there is no second chance to find that out.
+  const out = process.env.NAPI_DUMP_DIR;
+  if (out) {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(out, { recursive: true });
+    writeFileSync(`${out}/${md5}.bin`, body);
+  }
   return { status: "SA, tekstem", bytes: body.length };
 }
 

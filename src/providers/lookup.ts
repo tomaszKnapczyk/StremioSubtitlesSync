@@ -87,6 +87,11 @@ export async function cachedSubtitle(md5: string): Promise<Buffer | null> {
           // unpacked, so nobody ends up serving whatever is inside.
           log.warn(`NapiProjekt returned an archive for ${md5}, which this mode should not do`);
           return null;
+        case "blocked":
+          // A bot check, not an answer. Saying "nothing here" would be a lie,
+          // but there is nothing to serve either.
+          log.warn(`NapiProjekt answered with a bot check instead of a subtitle for ${md5}`);
+          return null;
         case "unexpected":
           log.warn(`NapiProjekt answered unexpectedly for ${md5}: ${result.head}`);
           return null;
