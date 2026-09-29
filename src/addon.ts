@@ -12,13 +12,14 @@ import {
   embeddedUrl,
   encodeHint,
   napiUrl,
+  napisy24AlignedUrl,
   napisy24ListedUrl,
   napisy24Url,
   slugify,
   syncUrl,
   type VideoHint,
 } from "./urls";
-import { listedNapisy24Id, napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
+import { bestListedNapisy24, napiSubtitleFor, napisy24SubtitleFor } from "./providers/lookup";
 import { isUnalignable, noReferenceKey, unalignableKey } from "./sync-failures";
 
 /**
@@ -157,11 +158,12 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     // The listing covers versions nobody uploaded against this file's hash,
     // which is most of them. Only an exact byte size is acted on.
     wantsPolish
-      ? listedNapisy24Id(
+      ? bestListedNapisy24(
           imdbTag(video.imdbId),
           video.type === "episode" ? video.season : undefined,
           video.type === "episode" ? video.episode : undefined,
           hint.videoSize,
+          filename,
         ).catch(() => null)
       : Promise.resolve(null),
   ]);
@@ -223,14 +225,25 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
     });
   }
 
-  // Only when the hash lookup did not already produce the same subtitle.
+  // Skipped when the hash lookup already produced a subtitle for this file.
   if (napisy24Listed && !napisy24) {
-    log.info(`${args.id}: Napisy24 lists a version timed to this file`);
-    subtitles.push({
-      id: `n24l-${napisy24Listed}`,
-      url: napisy24ListedUrl(base, configToken, napisy24Listed, slug, ext),
-      lang: label("pl", "exact", config.verboseLabels),
-    });
+    if (napisy24Listed.exact) {
+      // The listing states this file's byte size, so it needs no moving.
+      subtitles.push({
+        id: `n24l-${napisy24Listed.id}`,
+        url: napisy24ListedUrl(base, configToken, napisy24Listed.id, slug, ext),
+        lang: label("pl", "exact", config.verboseLabels),
+      });
+    } else if (embedded) {
+      // Made for another release, so it has to be moved onto this one. Only
+      // worth offering when there is a reference in the video to move it to.
+      log.info(`${args.id}: offering Napisy24 entry ${napisy24Listed.id} to be aligned`);
+      subtitles.push({
+        id: `n24a-${napisy24Listed.id}`,
+        url: napisy24AlignedUrl(base, configToken, hint, napisy24Listed.id, slug, ext),
+        lang: label("pl", "synced-embedded", config.verboseLabels),
+      });
+    }
   }
 
   for (const language of config.languages) {

@@ -7,6 +7,7 @@ import { log } from "../log";
 import { OpenSubtitlesClient, decodeSubtitle } from "../opensubtitles/client";
 import { cachedSubtitle, napisy24SubtitleFor } from "../providers/lookup";
 import { fetchListed } from "../providers/napisy24-client";
+import { resolveConfig as resolveCfg } from "../config";
 import { isFileHash } from "../providers/napiprojekt";
 import { OpenSubtitlesError } from "../opensubtitles/types";
 import { align, applyAlignment } from "../subtitles/align";
@@ -328,6 +329,72 @@ export function subtitleRoutes(): Router {
       send(res, ext, render(cues, ext));
     } catch (error) {
       fail(res, error, `serving Napisy24 entry ${id}`);
+    }
+  });
+
+  /**
+   * Serve a listed Napisy24 version, aligned to the video's own subtitle track.
+   *
+   * The whole point of the addon, on a source that actually has Polish
+   * subtitles: take a version made for another release and move it onto the
+   * file being played. The aligner decides whether the result is trustworthy,
+   * and a refusal is remembered so the entry stops being offered.
+   */
+  router.get("/:cfg/a/:hint/:id/:name", async (req, res) => {
+    const ext = extensionOf(req.params["name"]);
+    const hint = decodeHint(req.params["hint"]);
+    const id = req.params["id"] ?? "";
+    if (!hint || !/^\d+$/.test(id)) {
+      res.status(400).type("text/plain").send("Bad subtitle reference");
+      return;
+    }
+
+    const config = resolveCfg(decodeConfig(req.params["cfg"]));
+
+    let target: Cue[];
+    try {
+      const body = await fetchListed(id);
+      if (!body) throw new OpenSubtitlesError("Napisy24 did not return that version", 404);
+
+      target = parseSubtitle(decodeSubtitle(body, "pl"));
+      if (target.length === 0) {
+        throw new OpenSubtitlesError("The Napisy24 file parsed to zero cues", 502);
+      }
+    } catch (error) {
+      fail(res, error, `fetching Napisy24 entry ${id}`);
+      return;
+    }
+
+    try {
+      const reference = await embeddedReference(hint, config);
+      if (!reference) {
+        markUnalignable(noReferenceKey(req.params["hint"] ?? ""));
+        throw new OpenSubtitlesError("The video's own subtitles could not be read", 503);
+      }
+
+      const result = align(reference, target);
+      if (!result.applied) {
+        markUnalignable(unalignableKey(`n24:${req.params["hint"] ?? ""}`, Number(id)));
+        throw new OpenSubtitlesError(
+          `No confident alignment against the video ` +
+            `(overlap ${result.confidence.toFixed(2)}, peak ${result.peakRatio.toFixed(1)}, ` +
+            `${reference.length} reference cues vs ${target.length} subtitle cues)`,
+          503,
+        );
+      }
+
+      res.setHeader(
+        "X-Subtitle-Sync",
+        `napisy24 aligned offset=${result.offsetMs}ms ratio=${result.ratio.toFixed(5)} ` +
+          `confidence=${result.confidence.toFixed(3)}`,
+      );
+      log.info(
+        `aligned Napisy24 entry ${id} to the video: offset ${result.offsetMs}ms, ` +
+          `ratio ${result.ratio.toFixed(5)}, confidence ${result.confidence.toFixed(2)}`,
+      );
+      send(res, ext, render(applyAlignment(target, result), ext));
+    } catch (error) {
+      fail(res, error, `aligning Napisy24 entry ${id}`);
     }
   });
 

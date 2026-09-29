@@ -150,6 +150,25 @@ export function napisy24ListedUrl(
   return `${base}/${configToken}/l/${id}/${slug}.${ext}`;
 }
 
+/**
+ * Serve a listed Napisy24 version aligned to the video's own subtitle track.
+ *
+ * This is the case the addon exists for: Polish subtitles made for a different
+ * release of the same film, shifted onto the copy actually being played. The
+ * hint says which video to read the timing reference out of; the id says which
+ * subtitle to move.
+ */
+export function napisy24AlignedUrl(
+  base: string,
+  configToken: string,
+  hint: VideoHint,
+  id: string,
+  slug: string,
+  ext: string,
+): string {
+  return `${base}/${configToken}/a/${encodeHint(hint)}/${id}/${slug}.${ext}`;
+}
+
 /** Serve one file aligned to another. */
 export function syncUrl(
   base: string,

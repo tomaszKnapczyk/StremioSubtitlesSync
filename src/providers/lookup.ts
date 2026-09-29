@@ -4,6 +4,7 @@ import { streamSourceFor } from "../embedded/reference";
 import { fetchSubtitle, isFileHash } from "./napiprojekt";
 import { videoFileHash } from "./video-hash";
 import { fetchByHash, fetchListing, listingForExactFile } from "./napisy24-client";
+import { releaseScore } from "../picker";
 import type { ResolvedConfig } from "../config";
 import type { FileHint } from "../sources/types";
 
@@ -159,5 +160,66 @@ export async function listedNapisy24Id(
     }
     log.info(`Napisy24 lists a version timed to this file (entry ${match.id})`);
     return match.id;
+  });
+}
+
+export interface ListedChoice {
+  id: string;
+  /** True when the listing states this file's exact byte size. */
+  exact: boolean;
+  /** What the uploader timed it against, when the listing says. */
+  fps: number | undefined;
+}
+
+/** Listings are asked for once per title and reused across its releases. */
+const choiceCache = new TtlCache<ListedChoice | null>(6 * 60 * 60_000, 300);
+
+/**
+ * The listed version worth offering for this video.
+ *
+ * An exact byte size means the same file, so that entry is served unchanged.
+ * Failing that, the closest release by name is taken as something to align --
+ * which is what this addon is for. The name is a weak signal and is treated as
+ * one: it only decides which candidate to try, never whether the result is
+ * trustworthy. That call belongs to the aligner, which refuses a match it is
+ * not confident about.
+ */
+export async function bestListedNapisy24(
+  imdbId: string,
+  season: number | undefined,
+  episode: number | undefined,
+  videoSize: number | undefined,
+  filename: string | undefined,
+): Promise<ListedChoice | null> {
+  const key = `n24best:${imdbId}:${season ?? ""}:${episode ?? ""}:${videoSize ?? 0}:${filename ?? ""}`;
+
+  return choiceCache.wrap(key, async () => {
+    const listings = await fetchListing(imdbId, season, episode).catch(() => []);
+    if (listings.length === 0) return null;
+
+    const exact = listingForExactFile(listings, videoSize);
+    if (exact) {
+      log.info(`Napisy24 lists a version timed to this file (entry ${exact.id})`);
+      return { id: exact.id, exact: true, fps: exact.fps };
+    }
+
+    // Nothing made for this file, so pick something to align instead.
+    const ranked = listings
+      .map((entry) => ({
+        entry,
+        score: filename
+          ? Math.max(0, ...entry.releases.map((release) => releaseScore(filename, release)))
+          : 0,
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked[0]?.entry;
+    if (!best) return null;
+
+    log.info(
+      `Napisy24 lists ${listings.length} version(s) for ${imdbId}, none for this file; ` +
+        `offering entry ${best.id} to be aligned`,
+    );
+    return { id: best.id, exact: false, fps: best.fps };
   });
 }
