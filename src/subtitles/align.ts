@@ -46,6 +46,13 @@ export interface AlignOptions {
    * towers over the field. A lucky one does not.
    */
   minPeakRatio?: number;
+  /**
+   * The second opinion's own bar, in standard deviations. Only consulted for a
+   * match the overlap test turned down on its peak alone; see `onsetSearch`.
+   */
+  minOnsetPeakRatio?: number;
+  /** How far apart the two methods' shifts may be and still count as agreeing. */
+  onsetAgreementMs?: number;
   ratios?: number[];
 }
 
@@ -62,6 +69,11 @@ export interface AlignResult {
   confidence: number;
   /** How many standard deviations the winning shift stood above the rest. */
   peakRatio: number;
+  /**
+   * Set when the overlap test alone would have refused this match and the
+   * onset test vouched for it instead. Kept so the log can say which it was.
+   */
+  onsetPeakRatio?: number;
   /** False when the match was not convincing and the original timings were kept. */
   applied: boolean;
 }
@@ -76,6 +88,11 @@ const DEFAULTS = {
   // Measured across the test suite: real matches land between 6.7 and 13,
   // deliberately mismatched films between 3.4 and 3.7. This sits between them.
   minPeakRatio: 5,
+  // Measured on real files: a genuine match on dense dialogue stood 8.6 above
+  // the field, an unrelated film 3.6. This sits between them, and the method
+  // also has to agree with the overlap test on where the match is.
+  minOnsetPeakRatio: 6,
+  onsetAgreementMs: 1000,
   ratios: DEFAULT_RATIOS,
 };
 
@@ -218,6 +235,91 @@ function searchAtRatio(
   };
 }
 
+/** Onset bins are finer than speech bins: a line's start is a point, not a span. */
+const ONSET_BIN_MS = 100;
+/** How close two starts must fall to count as the same moment: +/- 300ms. */
+const ONSET_TOLERANCE_BINS = 3;
+
+/**
+ * The same search, but on where each line *starts* rather than on whether
+ * anyone is talking.
+ *
+ * The overlap test has a blind spot. On dense dialogue a subtitle is on screen
+ * most of the time -- measured at 81% and 90% for a sitcom episode -- so almost
+ * every shift covers almost everything, the scores flatten out, and a genuine
+ * match no longer towers over the field. The moment a line appears stays sparse
+ * and distinctive even then, which is what this measures.
+ *
+ * It is only ever used as a second opinion on a match the overlap test turned
+ * down for its peak alone, and it only vouches when it finds the same shift.
+ */
+function onsetSearch(
+  refCues: Cue[],
+  tgtCues: Cue[],
+  ratio: number,
+  maxOffsetMs: number,
+): { offsetMs: number; peakRatio: number } {
+  const none = { offsetMs: 0, peakRatio: 0 };
+  if (refCues.length === 0 || tgtCues.length === 0) return none;
+
+  const refOnsets = refCues.map((c) => Math.floor(c.start / ONSET_BIN_MS));
+  let lastStart = 0;
+  for (const c of tgtCues) lastStart = Math.max(lastStart, c.start * ratio);
+  const span = Math.floor(lastStart / ONSET_BIN_MS) + ONSET_TOLERANCE_BINS + 2;
+
+  // Each target start claims a small window, so a start that lands close
+  // enough to a reference start counts as the same moment.
+  const mask = new Uint8Array(span);
+  for (const c of tgtCues) {
+    const at = Math.floor((c.start * ratio) / ONSET_BIN_MS);
+    for (let d = -ONSET_TOLERANCE_BINS; d <= ONSET_TOLERANCE_BINS; d++) {
+      const i = at + d;
+      if (i >= 0 && i < span) mask[i] = 1;
+    }
+  }
+
+  const reach = Math.ceil(maxOffsetMs / ONSET_BIN_MS);
+  // As in the overlap test, a shift that leaves most of the reference hanging
+  // off either end is judged on too little to mean anything.
+  const minSupport = refOnsets.length * 0.5;
+
+  let best = 0;
+  let bestShift = 0;
+  let sum = 0;
+  let sumSquares = 0;
+  let tried = 0;
+
+  for (let shift = -reach; shift <= reach; shift++) {
+    let matched = 0;
+    let support = 0;
+    for (const onset of refOnsets) {
+      const i = onset - shift;
+      if (i < 0 || i >= span) continue;
+      support++;
+      if (mask[i]) matched++;
+    }
+    if (support < minSupport) continue;
+
+    const rate = matched / support;
+    sum += rate;
+    sumSquares += rate * rate;
+    tried++;
+    if (rate > best) {
+      best = rate;
+      bestShift = shift;
+    }
+  }
+
+  if (tried === 0) return none;
+  const mean = sum / tried;
+  const deviation = Math.sqrt(Math.max(0, sumSquares / tried - mean * mean));
+  return {
+    // Same convention as the overlap test: added to the target's times.
+    offsetMs: bestShift * ONSET_BIN_MS,
+    peakRatio: deviation > 0 ? (best - mean) / deviation : 0,
+  };
+}
+
 /** Finds the shift (and frame rate fix) that maps `target` onto `reference`. */
 export function align(reference: Cue[], target: Cue[], options: AlignOptions = {}): AlignResult {
   const opt = { ...DEFAULTS, ...options };
@@ -238,7 +340,24 @@ export function align(reference: Cue[], target: Cue[], options: AlignOptions = {
     }
   }
 
-  if (best.confidence < opt.minConfidence || best.peakRatio < opt.minPeakRatio) {
+  // A match turned down for its peak alone, with the overlap itself convincing,
+  // is the signature of dense dialogue rather than of a wrong film. Ask the
+  // onset test, and take its word only when it both stands out clearly and
+  // lands on the same shift. An unrelated film would have to pass three
+  // independent checks by chance.
+  let onsetPeakRatio: number | undefined;
+  if (best.confidence >= opt.minConfidence && best.peakRatio < opt.minPeakRatio) {
+    const onsets = onsetSearch(reference, target, best.ratio, opt.maxOffsetMs);
+    const agrees = Math.abs(onsets.offsetMs - best.offsetMs) <= opt.onsetAgreementMs;
+    if (onsets.peakRatio >= opt.minOnsetPeakRatio && agrees) {
+      onsetPeakRatio = onsets.peakRatio;
+    }
+  }
+
+  if (
+    best.confidence < opt.minConfidence ||
+    (best.peakRatio < opt.minPeakRatio && onsetPeakRatio === undefined)
+  ) {
     // Report what was actually measured. Returning the zeroed sentinel here hid
     // the reason for every rejection behind "overlap 0.00, peak 0.0", which
     // reads like a broken comparison rather than a considered refusal.
@@ -268,6 +387,7 @@ export function align(reference: Cue[], target: Cue[], options: AlignOptions = {
     // The refinement pass only looks at a handful of nearby shifts, so its own
     // spread means nothing. The wide search is what judged the match.
     peakRatio: best.peakRatio,
+    ...(onsetPeakRatio !== undefined ? { onsetPeakRatio } : {}),
     applied: true,
   };
 }
