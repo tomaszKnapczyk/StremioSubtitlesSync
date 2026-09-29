@@ -94,6 +94,20 @@ const TIMING_NOTE: Record<Timing, string> = {
  * aid: it puts each method in its own entry instead of grouping the subtitles
  * under the player's own language heading.
  */
+/**
+ * Best first. A file made for this release beats anything moved onto it; a
+ * hash-matched anchor beats the video's own sampled track, which beats a guess
+ * from the release name; and a file left as uploaded comes last, since other
+ * addons already serve it that way.
+ */
+const TIMING_RANK: Record<Timing, number> = {
+  exact: 0,
+  synced: 1,
+  "synced-embedded": 2,
+  "synced-weak": 3,
+  unsynced: 4,
+};
+
 function label(language: string, timing: Timing, verbose: boolean): string {
   const code = iso639_2(language);
   if (!verbose) return code;
@@ -235,47 +249,65 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   const slug = slugify(filename ?? args.id);
   const ext = config.format;
 
-  const subtitles: Subtitle[] = [];
+  // Collected with how each was timed, then sorted so the ones actually fitted
+  // to this file come first. The player keeps the order an addon returns, and
+  // with every entry under the same name, position is the only signal it has.
+  const offers: { subtitle: Subtitle; rank: number }[] = [];
+  const offer = (subtitle: Subtitle, timing: Timing): void => {
+    offers.push({ subtitle, rank: TIMING_RANK[timing] });
+  };
 
   // First, and without any aligning: NapiProjekt indexes by the video's own
   // hash, so this subtitle was made for this exact file. Nothing the addon can
   // compute from a reference beats that.
   if (napi) {
     log.info(`${args.id}: NapiProjekt has subtitles timed to this file`);
-    subtitles.push({
-      id: `napi-${napi.md5.slice(0, 12)}`,
-      url: napiUrl(base, configToken, napi.md5, slug, ext),
-      lang: label("pl", "exact", config.verboseLabels),
-    });
+    offer(
+      {
+        id: `napi-${napi.md5.slice(0, 12)}`,
+        url: napiUrl(base, configToken, napi.md5, slug, ext),
+        lang: label("pl", "exact", config.verboseLabels),
+      },
+      "exact",
+    );
   }
 
   if (napisy24) {
     log.info(`${args.id}: Napisy24 has subtitles timed to this file`);
-    subtitles.push({
-      id: `n24-${hint.videoHash ?? "file"}`,
-      url: napisy24Url(base, configToken, hint, slug, ext),
-      lang: label("pl", "exact", config.verboseLabels),
-    });
+    offer(
+      {
+        id: `n24-${hint.videoHash ?? "file"}`,
+        url: napisy24Url(base, configToken, hint, slug, ext),
+        lang: label("pl", "exact", config.verboseLabels),
+      },
+      "exact",
+    );
   }
 
   // Skipped when the hash lookup already produced a subtitle for this file.
   if (napisy24Listed && !napisy24) {
     if (napisy24Listed.exact) {
       // The listing states this file's byte size, so it needs no moving.
-      subtitles.push({
-        id: `n24l-${napisy24Listed.id}`,
-        url: napisy24ListedUrl(base, configToken, napisy24Listed.id, slug, ext),
-        lang: label("pl", "exact", config.verboseLabels),
-      });
+      offer(
+        {
+          id: `n24l-${napisy24Listed.id}`,
+          url: napisy24ListedUrl(base, configToken, napisy24Listed.id, slug, ext),
+          lang: label("pl", "exact", config.verboseLabels),
+        },
+        "exact",
+      );
     } else if (embedded) {
       // Made for another release, so it has to be moved onto this one. Only
       // worth offering when there is a reference in the video to move it to.
       log.info(`${args.id}: offering Napisy24 entry ${napisy24Listed.id} to be aligned`);
-      subtitles.push({
-        id: `n24a-${napisy24Listed.id}`,
-        url: napisy24AlignedUrl(base, configToken, hint, napisy24Listed.id, slug, ext),
-        lang: label("pl", "synced-embedded", config.verboseLabels),
-      });
+      offer(
+        {
+          id: `n24a-${napisy24Listed.id}`,
+          url: napisy24AlignedUrl(base, configToken, hint, napisy24Listed.id, slug, ext),
+          lang: label("pl", "synced-embedded", config.verboseLabels),
+        },
+        "synced-embedded",
+      );
     }
   }
 
@@ -321,11 +353,22 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
         continue;
       }
 
-      subtitles.push({
-        id: `${entry.timing}-${subtitle.fileId}`,
-        url: entry.url,
-        lang: label(language, entry.timing, config.verboseLabels),
-      });
+      // An anchor that cannot be downloaded leaves the file unshifted when it
+      // is served, whatever it was offered as, so it is ranked for what it
+      // will actually be.
+      const anchorLost =
+        (entry.timing === "synced" || entry.timing === "synced-weak") &&
+        quotaSpent &&
+        anchor !== null &&
+        !isFileCached(anchor.subtitle.fileId);
+      offer(
+        {
+          id: `${entry.timing}-${subtitle.fileId}`,
+          url: entry.url,
+          lang: label(language, entry.timing, config.verboseLabels),
+        },
+        anchorLost ? "unsynced" : entry.timing,
+      );
       offered++;
     }
   }
@@ -333,12 +376,21 @@ export async function getSubtitles(args: SubtitlesArgs): Promise<{
   // Last, after everything this instance can reach on its own account.
   if (proxy) {
     log.info(`${args.id}: offering a Polish subtitle by way of Stremio's addon`);
-    subtitles.push({
-      id: `proxy-${proxy.fileId}`,
-      url: proxyUrl(base, configToken, hint, proxy.fileId, slug, ext),
-      lang: label("pl", embedded ? "synced-embedded" : "unsynced", config.verboseLabels),
-    });
+    const timing: Timing = embedded ? "synced-embedded" : "unsynced";
+    offer(
+      {
+        id: `proxy-${proxy.fileId}`,
+        url: proxyUrl(base, configToken, hint, proxy.fileId, slug, ext),
+        lang: label("pl", timing, config.verboseLabels),
+      },
+      timing,
+    );
   }
+
+  // Stable sort: within one tier the sources keep the order they were asked
+  // in -- Napisy24, then OpenSubtitles on this instance's key, then the proxy.
+  offers.sort((a, b) => a.rank - b.rank);
+  const subtitles = offers.map((o) => o.subtitle);
 
   log.info(`${args.id}: offering ${subtitles.length} subtitles`);
   if (subtitles.length === 0) {
